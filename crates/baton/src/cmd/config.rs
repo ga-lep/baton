@@ -25,9 +25,11 @@ pub fn render(config: &Config) -> Vec<String> {
 }
 
 fn load() -> Result<Config, ConfigError> {
-    Config::load(&paths::config_file(), &|k| {
-        std::env::var(k).ok().filter(|v| !v.is_empty())
-    })
+    let path = paths::config_file().map_err(|source| ConfigError::Read {
+        path: "<config file>".into(),
+        source,
+    })?;
+    Config::load(&path, &|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
 }
 
 /// Runs `baton config check`; exits 1 on an invalid config.
