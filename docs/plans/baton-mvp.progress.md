@@ -10,3 +10,4 @@ Task 3: started
 Task 3: complete (bb6f558..88b4f84, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-3.md
   notes: [evidence] baton-drive child cwd defaults to $HOME (portable-pty CommandBuilder default) — daemon/spike MUST set cwd explicitly; [sec Low] fake-claude accepts non-UUID session ids (path traversal in test tool, real claude rejects) ; [sec Low] unquoted temp path in drive_smoke hook cmd; [sec Info] Drive Drop kills without wait (zombies); [review] malformed settings silently ignored in fake-claude
+Task 4: started
