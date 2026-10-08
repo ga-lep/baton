@@ -55,3 +55,6 @@ Task 14: complete (24ed80c..363280e, gate ok, security PASS, review PASS, eviden
   evidence: docs/plans/baton-mvp.evidence/task-14.md
   notes: M3a status/attention. carried-over: SessionStart field validation (len caps, no control chars, absolute path) + {:?} id logging; baton-core now depends on baton-proto; terminal_focused sent but unused (for Task 15); [sec Low] hook event name logged unescaped ({event:?}); hook cmds on unbounded channel — cap event len / bounded try_send; [sec NOTE for Task 17] transcript_path accepts any absolute path — canonicalize and require under <profile config dir>/projects before reading
 Task 15: started
+Task 15: complete (453e01a..e20d22b, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/baton-mvp.evidence/task-15.md
+  notes: M3 reached (notifications via log sink only; real D-Bus not exercised, user asleep). carried-over: hook event name validation (1..64 ASCII alnum) + {:?} logging; all daemon-starting tests set BATON_NOTIFY_SINK=off; [evidence] long BATON_RUNTIME_DIR -> 'path must be shorter than SUN_LEN' on bind — consider a clear error message; [sec Low] notification text: escape <>& for markup servers, drop Unicode Cf (bidi/zero-width); [sec Low] LogSink falls back to ./ when state_dir fails, no O_NOFOLLOW; [review] unknown BATON_NOTIFY_SINK value (typo) silently means real D-Bus — warn
