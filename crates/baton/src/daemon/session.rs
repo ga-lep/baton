@@ -15,6 +15,7 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 /// Chunks queued between the PTY reader thread and the session task.
 const OUTPUT_QUEUE: usize = 64;
@@ -32,7 +33,7 @@ pub enum Cmd {
     },
     /// Send a snapshot to `tx`, then stream output to it.
     Attach {
-        tx: mpsc::Sender<DaemonMsg>,
+        sink: ClientSink,
         nudge: bool,
     },
     Scrollback {
@@ -41,6 +42,29 @@ pub enum Cmd {
         reply: oneshot::Sender<Vec<Vec<u8>>>,
     },
     Exited(i32),
+}
+
+/// The attached client's outgoing queue plus the switch that makes its
+/// connection report an error and close when the queue overflows.
+#[derive(Clone)]
+pub struct ClientSink {
+    pub tx: mpsc::Sender<DaemonMsg>,
+    pub kick: CancellationToken,
+}
+
+impl ClientSink {
+    /// Queues `msg`. Returns `false` when the client must be dropped: its
+    /// queue is full (the connection is told via `kick`) or already closed.
+    pub fn send(&self, msg: DaemonMsg) -> bool {
+        match self.tx.try_send(msg) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.kick.cancel();
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+        }
+    }
 }
 
 /// Cheap handle to a running session task.
@@ -187,7 +211,7 @@ struct Task {
     master: Box<dyn portable_pty::MasterPty + Send>,
     input: std_mpsc::SyncSender<Vec<u8>>,
     info: Arc<Mutex<SessionInfo>>,
-    client: Option<mpsc::Sender<DaemonMsg>>,
+    client: Option<ClientSink>,
     exited: bool,
 }
 
@@ -224,7 +248,7 @@ impl Task {
         match cmd {
             Cmd::Input(bytes) => self.write(bytes),
             Cmd::Resize { rows, cols } => self.resize(rows, cols),
-            Cmd::Attach { tx, nudge } => self.attach(tx, nudge),
+            Cmd::Attach { sink, nudge } => self.attach(sink, nudge),
             Cmd::Scrollback {
                 start,
                 count,
@@ -265,7 +289,7 @@ impl Task {
         self.pty_resize(rows, cols);
     }
 
-    fn attach(&mut self, tx: mpsc::Sender<DaemonMsg>, nudge: bool) {
+    fn attach(&mut self, sink: ClientSink, nudge: bool) {
         let (rows, cols) = self.screen.size();
         let snapshot = DaemonMsg::Snapshot {
             session: self.id.clone(),
@@ -273,10 +297,10 @@ impl Task {
             cols,
             bytes: self.screen.snapshot(),
         };
-        if tx.try_send(snapshot).is_err() {
+        if !sink.send(snapshot) {
             return;
         }
-        self.client = Some(tx);
+        self.client = Some(sink);
         // A resize to cols-1 and back raises SIGWINCH twice so the child
         // repaints. Only the PTY is touched: the screen keeps its size.
         if nudge && !self.exited && cols > 1 {
@@ -308,14 +332,48 @@ impl Task {
     }
 
     fn forward(&mut self, msg: DaemonMsg) {
-        let Some(tx) = &self.client else { return };
-        match tx.try_send(msg) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!(session = %self.id, "client too slow; detaching it");
-                self.client = None;
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => self.client = None,
+        let Some(sink) = &self.client else { return };
+        if !sink.send(msg) {
+            tracing::warn!(session = %self.id, "client too slow or gone; detaching it");
+            self.client = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn out(n: u8) -> DaemonMsg {
+        DaemonMsg::Output {
+            session: SessionId("s".into()),
+            bytes: vec![n],
+        }
+    }
+
+    #[test]
+    fn overflowing_queue_kicks_the_client() {
+        let (tx, mut rx) = mpsc::channel(2);
+        let sink = ClientSink {
+            tx,
+            kick: CancellationToken::new(),
+        };
+        assert!(sink.send(out(1)) && sink.send(out(2)));
+        assert!(!sink.kick.is_cancelled());
+        assert!(!sink.send(out(3)));
+        assert!(sink.kick.is_cancelled());
+        assert_eq!(rx.try_recv().ok(), Some(out(1)));
+    }
+
+    #[test]
+    fn closed_queue_drops_without_kick() {
+        let (tx, rx) = mpsc::channel(2);
+        drop(rx);
+        let sink = ClientSink {
+            tx,
+            kick: CancellationToken::new(),
+        };
+        assert!(!sink.send(out(1)));
+        assert!(!sink.kick.is_cancelled());
     }
 }

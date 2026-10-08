@@ -1,7 +1,8 @@
 //! Socket accept loop and per-connection protocol handling.
 
 use super::registry::{CLIENT_QUEUE, ChildGroups, Registry, validate_size};
-use baton_proto::{ClientMsg, DaemonMsg, PROTOCOL_VERSION, decode, encode, framed};
+use super::session::ClientSink;
+use baton_proto::{ClientMsg, DaemonMsg, MAX_INPUT, PROTOCOL_VERSION, decode, encode, framed};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,6 +15,8 @@ use tokio_util::sync::CancellationToken;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 /// Maximum simultaneous connections.
 const MAX_CONNECTIONS: usize = 64;
+/// How long to wait to deliver the slow-client notice before closing anyway.
+const KICK_NOTICE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Shared daemon state.
 pub struct State {
@@ -141,9 +144,21 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
     // sessions hold senders, so a takeover closes it and ends this connection.
     let mut stream_rx = mpsc::channel::<DaemonMsg>(1).1;
     let mut attached = false;
+    let mut kick = CancellationToken::new();
     loop {
         let msg = tokio::select! {
+            biased;
             () = shutdown.cancelled() => break,
+            () = kick.cancelled() => {
+                // The queue overflowed: say why, then close so the client
+                // notices and can reattach.
+                let _ = tokio::time::timeout(
+                    KICK_NOTICE_TIMEOUT,
+                    send(&mut conn, &error("client too slow; disconnected")),
+                )
+                .await;
+                break;
+            }
             streamed = stream_rx.recv(), if attached => match streamed {
                 Some(m) => {
                     if !send(&mut conn, &m).await {
@@ -179,7 +194,12 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
                     let (tx, rx) = mpsc::channel(CLIENT_QUEUE);
                     stream_rx = rx;
                     attached = true;
-                    state.registry.attach(conn_id, rows, cols, &tx);
+                    kick = CancellationToken::new();
+                    let sink = ClientSink {
+                        tx,
+                        kick: kick.clone(),
+                    };
+                    state.registry.attach(conn_id, rows, cols, &sink);
                     None
                 }
                 Err(e) => Some(error(e)),
@@ -191,6 +211,10 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
                 }
                 Err(e) => Some(error(e)),
             },
+            ClientMsg::Input { bytes, .. } if bytes.len() > MAX_INPUT => Some(error(format!(
+                "input of {} bytes exceeds the {MAX_INPUT}-byte limit",
+                bytes.len()
+            ))),
             ClientMsg::Input { session, bytes } => {
                 state.registry.input(&session, bytes).err().map(error)
             }

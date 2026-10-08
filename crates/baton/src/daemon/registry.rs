@@ -1,13 +1,13 @@
 //! The set of live sessions, the single attached client and the child
 //! process groups that must be terminated at shutdown.
 
-use super::session::{self, Cmd, SessionHandle};
+use super::session::{self, ClientSink, Cmd, SessionHandle};
 use baton_core::config::Config;
 use baton_core::paths;
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
 use std::sync::{Arc, Mutex, MutexGuard};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 /// Largest accepted terminal dimension (rows or columns).
 pub const MAX_DIM: u16 = 1000;
@@ -81,7 +81,7 @@ impl ChildGroups {
 
 struct Attached {
     conn: u64,
-    tx: mpsc::Sender<DaemonMsg>,
+    sink: ClientSink,
 }
 
 struct Inner {
@@ -196,10 +196,10 @@ impl Registry {
             && !fresh.is_empty()
         {
             let list = inner.sessions.iter().map(SessionHandle::info).collect();
-            let _ = att.tx.try_send(DaemonMsg::SessionList(list));
+            att.sink.send(DaemonMsg::SessionList(list));
             for s in inner.sessions.iter().filter(|s| fresh.contains(&s.id)) {
                 s.send(Cmd::Attach {
-                    tx: att.tx.clone(),
+                    sink: att.sink.clone(),
                     nudge: inner.nudge,
                 });
             }
@@ -235,23 +235,23 @@ impl Registry {
     ///
     /// Queues `SessionList`, then one `Snapshot` per session (in order),
     /// after which output streams to `tx`.
-    pub fn attach(&self, conn: u64, rows: u16, cols: u16, tx: &mpsc::Sender<DaemonMsg>) {
+    pub fn attach(&self, conn: u64, rows: u16, cols: u16, sink: &ClientSink) {
         let mut inner = self.lock();
         if let Some(old) = inner.attached.replace(Attached {
             conn,
-            tx: tx.clone(),
+            sink: sink.clone(),
         }) {
-            let _ = old.tx.try_send(DaemonMsg::Error {
+            old.sink.send(DaemonMsg::Error {
                 message: "replaced by another client".into(),
             });
         }
         inner.size = (rows, cols);
         let list = inner.sessions.iter().map(SessionHandle::info).collect();
-        let _ = tx.try_send(DaemonMsg::SessionList(list));
+        sink.send(DaemonMsg::SessionList(list));
         for s in &inner.sessions {
             s.send(Cmd::Resize { rows, cols });
             s.send(Cmd::Attach {
-                tx: tx.clone(),
+                sink: sink.clone(),
                 nudge: inner.nudge,
             });
         }

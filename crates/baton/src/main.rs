@@ -37,6 +37,13 @@ fn run(cli: Cli) -> ExitCode {
         }) => cmd::config::check(),
         Some(Command::Daemon { action }) => cmd::daemon::run(&action),
         Some(Command::Debug { args }) => cmd::debug::run(&args),
+        None => match tui::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("baton: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
         _ => not_implemented(),
     }
 }

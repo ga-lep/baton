@@ -115,7 +115,7 @@ pub fn layout(area: Rect) -> Layout {
     }
 }
 
-fn contains(r: Rect, x: u16, y: u16) -> bool {
+pub(crate) fn contains(r: Rect, x: u16, y: u16) -> bool {
     x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
 

@@ -322,3 +322,67 @@ fn second_attach_takes_over_and_notifies_the_first() -> Result<()> {
     assert!(recv(&mut first).is_err(), "first connection must close");
     Ok(())
 }
+
+#[test]
+fn oversized_input_is_rejected_and_the_connection_survives() -> Result<()> {
+    let env = Env::bash(false)?;
+    let a = env.id("a")?;
+    env.debug(&["open", "x"])?;
+    let mut s = UnixStream::connect(env.sock())?;
+    s.set_read_timeout(Some(Duration::from_secs(5)))?;
+    send(
+        &mut s,
+        &ClientMsg::Hello {
+            version: PROTOCOL_VERSION,
+            role: Role::Tui,
+        },
+    )?;
+    assert!(matches!(recv(&mut s)?, DaemonMsg::Welcome { .. }));
+    let session = baton_proto::SessionId(a);
+    send(
+        &mut s,
+        &ClientMsg::Input {
+            session: session.clone(),
+            bytes: vec![b'x'; baton_proto::MAX_INPUT + 1],
+        },
+    )?;
+    assert!(matches!(recv(&mut s)?, DaemonMsg::Error { .. }));
+    // Exactly the cap is accepted (no reply), and the connection still works.
+    send(
+        &mut s,
+        &ClientMsg::Input {
+            session,
+            bytes: vec![b' '; baton_proto::MAX_INPUT],
+        },
+    )?;
+    send(&mut s, &ClientMsg::Status)?;
+    assert!(matches!(recv(&mut s)?, DaemonMsg::DaemonStatus { .. }));
+    Ok(())
+}
+
+#[test]
+fn a_client_that_cannot_keep_up_is_told_and_disconnected() -> Result<()> {
+    let env = Env::bash(false)?;
+    let a = env.id("a")?;
+    env.debug(&["open", "x"])?;
+    let mut s = attached_client(&env)?;
+    s.set_read_timeout(Some(Duration::from_secs(15)))?;
+    // Flood output while this client does not read at all.
+    env.debug(&["send", &a, "yes 0123456789abcdef | head -c 200000000\\r"])?;
+    std::thread::sleep(Duration::from_secs(3));
+    let mut told = false;
+    for _ in 0..200_000 {
+        match recv(&mut s) {
+            Ok(DaemonMsg::Error { message }) => {
+                assert!(message.contains("too slow"), "{message}");
+                told = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    assert!(told, "never received the slow-client error");
+    assert!(recv(&mut s).is_err(), "connection must close after it");
+    Ok(())
+}

@@ -150,6 +150,47 @@ pub fn spawn_detached_foreground() -> io::Result<()> {
     cmd.spawn().map(drop)
 }
 
+/// How long a SIGTERMed daemon gets to exit before `restart_daemon` gives up.
+const RESTART_STOP_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Stops the running daemon (found through the socket's peer credentials, so
+/// it works across protocol versions) and starts a fresh one.
+///
+/// # Errors
+/// If the socket is served by another user, the old daemon does not exit, or
+/// the new one cannot be started.
+pub async fn restart_daemon(role: Role) -> Result<Conn, ClientError> {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    paths::ensure_runtime_dir()?;
+    let sock = paths::socket_path();
+    if let Ok(stream) = UnixStream::connect(&sock).await {
+        let cred = stream.peer_cred()?;
+        let expected_uid = nix::unistd::getuid().as_raw();
+        if cred.uid() != expected_uid {
+            return Err(ClientError::UntrustedServer {
+                server_uid: cred.uid(),
+                expected_uid,
+            });
+        }
+        drop(stream);
+        if let Some(pid) = cred.pid().map(Pid::from_raw) {
+            // SIGTERM makes the daemon terminate its sessions and exit.
+            let _ = kill(pid, Signal::SIGTERM);
+            let deadline = Instant::now() + RESTART_STOP_TIMEOUT;
+            while kill(pid, None).is_ok() {
+                if Instant::now() >= deadline {
+                    return Err(ClientError::Io(io::Error::other(
+                        "old daemon did not stop in time",
+                    )));
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+    ensure_daemon(role).await
+}
+
 /// Retries `connect` with backoff until `timeout` elapses.
 ///
 /// # Errors

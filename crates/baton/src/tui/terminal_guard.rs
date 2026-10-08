@@ -1,7 +1,8 @@
 //! Puts the host terminal into TUI mode and reliably puts it back.
 
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Once;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
@@ -16,6 +17,24 @@ use crossterm::{execute, queue};
 
 /// Whether keyboard enhancement flags were pushed and must be popped.
 static ENHANCED: AtomicBool = AtomicBool::new(false);
+
+/// Guards the one-time panic hook installation.
+static HOOK: Once = Once::new();
+/// How many times the hook was actually installed (always 0 or 1).
+static HOOK_INSTALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// Chains a hook that restores the terminal before the previous hook runs.
+/// Installed once per process, however often the guard is entered.
+fn install_panic_hook() {
+    HOOK.call_once(|| {
+        HOOK_INSTALLS.fetch_add(1, Ordering::SeqCst);
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            restore();
+            previous(info);
+        }));
+    });
+}
 
 /// Undo everything [`TerminalGuard::enter`] did. Safe to call repeatedly.
 fn restore() {
@@ -46,11 +65,7 @@ impl TerminalGuard {
     /// # Errors
     /// Fails if the terminal cannot be configured; it is restored first.
     pub fn enter() -> io::Result<Self> {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            restore();
-            previous(info);
-        }));
+        install_panic_hook();
         let guard = Self { _private: () };
         enable_raw_mode()?;
         // The query must happen in raw mode; it is false when unsupported.
@@ -81,5 +96,18 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panic_hook_is_installed_only_once() {
+        for _ in 0..3 {
+            install_panic_hook();
+        }
+        assert_eq!(HOOK_INSTALLS.load(Ordering::SeqCst), 1);
     }
 }

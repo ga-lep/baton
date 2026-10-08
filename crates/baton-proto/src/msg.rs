@@ -11,6 +11,9 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// Maximum size of one frame (16 MiB).
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 
+/// Largest `ClientMsg::Input` payload; clients chunk anything bigger (64 KiB).
+pub const MAX_INPUT: usize = 64 * 1024;
+
 /// Stable baton session id: `"<project>/<repo-path>"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SessionId(pub String);
