@@ -1,8 +1,10 @@
 //! `baton` binary entry point.
 
 mod cli;
+mod spike;
 #[allow(dead_code)] // consumed by the TUI client in later tasks
 mod term;
+mod tui;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -19,6 +21,13 @@ fn run(cli: Cli) -> ExitCode {
     match cli.command {
         // The hook must never print or fail: its stdout would reach Claude's context.
         Some(Command::Hook { .. }) => ExitCode::SUCCESS,
+        Some(Command::Spike { cmd }) => match spike::run(&cmd) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("baton spike: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
         _ => not_implemented(),
     }
 }

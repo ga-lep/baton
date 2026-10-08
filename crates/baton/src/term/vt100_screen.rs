@@ -27,12 +27,13 @@ pub struct Vt100Screen {
 }
 
 impl Vt100Screen {
-    /// Create a screen of `rows` x `cols` keeping at most `scrollback_cap` history lines.
+    /// Create a screen of `rows` x `cols` (each clamped to at least 1, since
+    /// `vt100` panics on empty grids) keeping at most `scrollback_cap` history lines.
     pub fn new(rows: u16, cols: u16, scrollback_cap: usize) -> Self {
         Self {
             parser: vt100::Parser::new_with_callbacks(
-                rows,
-                cols,
+                rows.max(1),
+                cols.max(1),
                 scrollback_cap,
                 TitleCallbacks::default(),
             ),
@@ -62,7 +63,7 @@ impl Screen for Vt100Screen {
     }
 
     fn resize(&mut self, rows: u16, cols: u16) {
-        self.parser.screen_mut().set_size(rows, cols);
+        self.parser.screen_mut().set_size(rows.max(1), cols.max(1));
     }
 
     fn size(&self) -> (u16, u16) {
@@ -267,5 +268,15 @@ mod tests {
         let line: String = (0..5).map(|x| buf[(x, 0)].symbol()).collect();
         assert_eq!(line, "hello");
         assert_eq!(buf[(0, 0)].fg, Color::Indexed(1));
+    }
+
+    #[test]
+    fn zero_sizes_are_clamped() {
+        let mut s = Vt100Screen::new(0, 0, 10);
+        assert_eq!(s.size(), (1, 1));
+        s.resize(0, 5);
+        assert_eq!(s.size(), (1, 5));
+        s.process(b"a\r\nb\r\nc");
+        assert!(s.scrollback_rows(0, 5).len() <= 5);
     }
 }
