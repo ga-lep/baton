@@ -1,7 +1,10 @@
 //! `baton` binary entry point.
 
 mod cli;
+mod client;
 mod cmd;
+mod daemon;
+mod logging;
 mod spike;
 #[allow(dead_code)] // consumed by the TUI client in later tasks
 mod term;
@@ -32,6 +35,7 @@ fn run(cli: Cli) -> ExitCode {
         Some(Command::Config {
             action: ConfigAction::Check,
         }) => cmd::config::check(),
+        Some(Command::Daemon { action }) => cmd::daemon::run(&action),
         _ => not_implemented(),
     }
 }
