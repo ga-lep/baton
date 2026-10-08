@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bump on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Maximum size of one frame (16 MiB).
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -146,6 +146,7 @@ pub struct SessionInfo {
     pub profile: Option<String>,
     pub status: Status,
     pub claude_session_id: Option<String>,
+    pub transcript_path: Option<String>,
     pub model: Option<String>,
     /// Unix timestamp, seconds.
     pub started_at: u64,

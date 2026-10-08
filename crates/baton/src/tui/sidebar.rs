@@ -129,6 +129,7 @@ mod tests {
             profile: None,
             status,
             claude_session_id: None,
+            transcript_path: None,
             model: None,
             started_at: 0,
             exit_code: None,

@@ -57,6 +57,7 @@ pub fn run_foreground() -> Result<Outcome> {
 async fn serve_until_shutdown(run_dir: &std::path::Path) -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
     let sock = run_dir.join("baton.sock");
+    write_hooks_json(run_dir).context("writing hooks.json")?;
     let listener = lifecycle::bind_socket(&sock).context("binding socket")?;
     tracing::info!(pid = std::process::id(), "daemon listening");
 
@@ -76,5 +77,29 @@ async fn serve_until_shutdown(run_dir: &std::path::Path) -> Result<()> {
     lifecycle::terminate_groups(&groups, KILL_GRACE).await;
     lifecycle::remove_socket(&sock);
     tracing::info!("daemon stopped");
+    Ok(())
+}
+
+/// Writes `<run_dir>/hooks.json` for the current executable, atomically
+/// (private temp file, then rename) inside the private runtime directory.
+fn write_hooks_json(run_dir: &std::path::Path) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let exe = std::env::current_exe().context("locating the baton executable")?;
+    let json = baton_core::hooks::settings_json(&exe);
+    let tmp = run_dir.join(format!("hooks.json.tmp.{}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    f.write_all(json.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    if let Err(e) = std::fs::rename(&tmp, run_dir.join("hooks.json")) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(())
 }

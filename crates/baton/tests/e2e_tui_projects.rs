@@ -23,8 +23,8 @@ impl Env {
             std::fs::create_dir(root.join(repo))?;
         }
         let config = format!(
-            "[profiles.a]\ncommand = \"bash --norc --noprofile\"\nenv = {{ WHO = \"a\" }}\n\
-             [profiles.b]\ncommand = \"bash --norc --noprofile\"\nenv = {{ WHO = \"b\" }}\n\
+            "[profiles.a]\ncommand = \"bash --norc --noprofile -s --\"\nenv = {{ WHO = \"a\" }}\n\
+             [profiles.b]\ncommand = \"bash --norc --noprofile -s --\"\nenv = {{ WHO = \"b\" }}\n\
              [[projects]]\nname = \"loop\"\nprofile = \"a\"\nrepos = [\n\
              {{ path = \"{r}/alpha\" }},\n{{ path = \"{r}/beta\" }},\n\
              {{ path = \"{r}/hyper\", profile = \"b\" }},\n]\n",

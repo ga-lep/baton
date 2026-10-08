@@ -76,8 +76,17 @@ impl Conn {
 /// [`ClientError::UntrustedServer`] if another user serves the socket, or any
 /// directory-check or handshake failure.
 pub async fn connect(role: Role) -> Result<Conn, ClientError> {
+    connect_to(&paths::socket_path(), role).await
+}
+
+/// Like [`connect`], for the socket at `path` (the runtime directory is still
+/// checked, and the server must still run as our user).
+///
+/// # Errors
+/// As for [`connect`].
+pub async fn connect_to(path: &Path, role: Role) -> Result<Conn, ClientError> {
     paths::ensure_runtime_dir()?;
-    connect_at(&paths::socket_path(), role, nix::unistd::getuid().as_raw()).await
+    connect_at(path, role, nix::unistd::getuid().as_raw()).await
 }
 
 /// Connects to the socket at `path`, requiring the server's uid to be

@@ -3,3 +3,4 @@
 pub mod config;
 pub mod daemon;
 pub mod debug;
+pub mod hook;

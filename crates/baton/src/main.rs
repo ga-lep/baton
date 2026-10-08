@@ -18,6 +18,12 @@ use std::process::ExitCode;
 const EXIT_NOT_IMPLEMENTED: u8 = 2;
 
 fn main() -> ExitCode {
+    // `baton hook` must stay silent and exit 0 whatever it is given, which
+    // clap (exit code 2 on bad arguments) cannot promise: dispatch it first.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "hook") {
+        return cmd::hook::run(&args[2..]);
+    }
     run(Cli::parse())
 }
 

@@ -36,6 +36,7 @@ mod tests {
             profile: Some("work".into()),
             status: Status::Permission,
             claude_session_id: Some("abc".into()),
+            transcript_path: None,
             model: Some("opus".into()),
             started_at: 1_700_000_000,
             exit_code: Some(0),

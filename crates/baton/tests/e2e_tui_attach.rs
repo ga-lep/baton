@@ -25,7 +25,7 @@ impl Env {
         std::fs::create_dir(dir.path().join("a"))?;
         let root = dir.path().canonicalize()?;
         let config = format!(
-            "[profiles.p]\ncommand = \"bash --norc --noprofile\"\n\
+            "[profiles.p]\ncommand = \"bash --norc --noprofile -s --\"\n\
              [[projects]]\nname = \"x\"\nprofile = \"p\"\n\
              repos = [{{ path = \"{}/a\" }}]\n",
             root.display()
@@ -154,7 +154,10 @@ fn version_mismatch_shows_the_modal_and_n_quits() -> Result<()> {
     let mut d = env.tui()?;
     wait(
         &d,
-        "Daemon protocol v1 ≠ v99. Restart daemon \\(sessions will be resumed\\)\\? \\[y/N\\]",
+        &format!(
+            "Daemon protocol v{} ≠ v99. Restart daemon \\(sessions will be resumed\\)\\? \\[y/N\\]",
+            baton_proto::PROTOCOL_VERSION
+        ),
     )
     .context("modal")?;
     d.send(b"n")?;

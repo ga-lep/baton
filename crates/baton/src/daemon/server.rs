@@ -235,6 +235,15 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
                     Err(e) => error(e),
                 },
             ),
+            ClientMsg::Hook {
+                baton_session,
+                event,
+                payload_json,
+            } => {
+                // Fire and forget: the hook client does not wait for a reply.
+                state.registry.hook(&baton_session, &event, &payload_json);
+                None
+            }
             _ => Some(error("not supported yet")),
         };
         if let Some(reply) = reply

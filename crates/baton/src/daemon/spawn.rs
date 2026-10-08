@@ -18,14 +18,20 @@ pub struct Spawned {
 
 /// Builds the child command from an argument vector (never a shell string).
 ///
-/// The command is the profile argv followed by the repo `args`, runs with
+/// The command is the profile argv, `--settings <hooks>` (the injected hook
+/// registration; additive to the user's own settings), then the repo `args`. It runs with
 /// `cwd` set to the repo (portable-pty would otherwise use `$HOME`), and gets
 /// the inherited environment, the profile environment, then `BATON_SESSION`
 /// and `BATON_SOCK`, which the profile cannot override.
 ///
 /// # Errors
 /// If the profile argv is empty.
-pub fn build_command(spec: &SessionSpec, id: &SessionId, sock: &Path) -> Result<CommandBuilder> {
+pub fn build_command(
+    spec: &SessionSpec,
+    id: &SessionId,
+    sock: &Path,
+    hooks: &Path,
+) -> Result<CommandBuilder> {
     let (program, rest) = spec.argv.split_first().context("empty profile command")?;
     // A relative path containing '/' would otherwise resolve against the new
     // cwd; anchor it to the daemon's own directory like a shell would.
@@ -36,6 +42,8 @@ pub fn build_command(spec: &SessionSpec, id: &SessionId, sock: &Path) -> Result<
     };
     let mut cmd = CommandBuilder::new(program);
     cmd.args(rest);
+    cmd.arg("--settings");
+    cmd.arg(hooks);
     cmd.args(&spec.args);
     cmd.cwd(&spec.repo);
     cmd.env("TERM", "xterm-256color");
@@ -52,8 +60,14 @@ pub fn build_command(spec: &SessionSpec, id: &SessionId, sock: &Path) -> Result<
 ///
 /// # Errors
 /// If the PTY cannot be opened or the program cannot be started.
-pub fn spawn(spec: &SessionSpec, id: &SessionId, sock: &Path, size: (u16, u16)) -> Result<Spawned> {
-    let cmd = build_command(spec, id, sock)?;
+pub fn spawn(
+    spec: &SessionSpec,
+    id: &SessionId,
+    sock: &Path,
+    hooks: &Path,
+    size: (u16, u16),
+) -> Result<Spawned> {
+    let cmd = build_command(spec, id, sock, hooks)?;
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: size.0,
@@ -105,9 +119,18 @@ mod tests {
     #[test]
     fn command_is_argv_with_repo_cwd_and_baton_env() {
         let id = SessionId("x//tmp".into());
-        let cmd = build_command(&spec(), &id, Path::new("/run/baton.sock")).unwrap();
+        let cmd = build_command(
+            &spec(),
+            &id,
+            Path::new("/run/baton.sock"),
+            Path::new("/run/hooks.json"),
+        )
+        .unwrap();
         let argv: Vec<_> = cmd.get_argv().iter().map(|a| a.to_string_lossy()).collect();
-        assert_eq!(argv, ["bash", "--norc", "-i"]);
+        assert_eq!(
+            argv,
+            ["bash", "--norc", "--settings", "/run/hooks.json", "-i"]
+        );
         assert_eq!(
             cmd.get_cwd().map(|c| c.as_os_str()),
             Some(OsStr::new("/tmp"))
@@ -126,6 +149,6 @@ mod tests {
         let mut s = spec();
         s.argv.clear();
         let id = SessionId("x//tmp".into());
-        assert!(build_command(&s, &id, Path::new("/s")).is_err());
+        assert!(build_command(&s, &id, Path::new("/s"), Path::new("/h")).is_err());
     }
 }

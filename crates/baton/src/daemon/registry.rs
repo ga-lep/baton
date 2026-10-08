@@ -3,6 +3,7 @@
 
 use super::session::{self, ClientSink, Cmd, SessionHandle};
 use baton_core::config::Config;
+use baton_core::hooks::{self, HookPayload};
 use baton_core::paths;
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
@@ -155,6 +156,7 @@ impl Registry {
             .find(|p| p.name == name)
             .ok_or_else(|| OpenError::UnknownProject(name.to_owned()))?;
         let sock = paths::socket_path();
+        let hooks = paths::hooks_json_path();
         // Serializes opens so two requests cannot both spawn the same
         // session; the registry lock itself is not held while spawning.
         let _open = self.open_gate.lock().unwrap_or_else(|e| e.into_inner());
@@ -189,6 +191,7 @@ impl Registry {
                 id: id.clone(),
                 spec,
                 sock: &sock,
+                hooks: &hooks,
                 size,
                 scrollback: config.scrollback_lines,
             };
@@ -237,6 +240,21 @@ impl Registry {
             Ok(result)
         } else {
             Err(OpenError::Spawn(failures.join("; ")))
+        }
+    }
+
+    /// Applies a hook event from a Claude child to its session. Events for
+    /// unknown sessions or outside the closed event set are logged and dropped.
+    pub fn hook(&self, session: &SessionId, event: &str, payload_json: &str) {
+        if !hooks::is_known_event(event) {
+            tracing::debug!("dropping hook with unknown event");
+            return;
+        }
+        let payload = HookPayload::parse(payload_json);
+        let inner = self.lock();
+        match inner.sessions.iter().find(|s| &s.id == session) {
+            Some(s) => s.apply_hook(event, &payload),
+            None => tracing::debug!("dropping hook {event} for unknown session {session}"),
         }
     }
 

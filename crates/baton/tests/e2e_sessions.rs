@@ -39,7 +39,8 @@ impl Env {
     }
 
     fn bash(nudge: bool) -> Result<Self> {
-        Self::new("bash --norc --noprofile", nudge)
+        // `-s --` makes the injected `--settings <file>` plain positional parameters.
+        Self::new("bash --norc --noprofile -s --", nudge)
     }
 
     fn root(&self) -> Result<PathBuf> {

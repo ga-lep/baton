@@ -6,6 +6,7 @@ use crate::term::screen::Screen;
 use crate::term::vt100_screen::Vt100Screen;
 use anyhow::{Result, bail};
 use baton_core::config::SessionSpec;
+use baton_core::hooks::HookPayload;
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
 use portable_pty::PtySize;
@@ -80,6 +81,21 @@ impl SessionHandle {
         self.info.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// Applies a hook event to the session summary.
+    ///
+    /// `SessionStart` records the Claude session id, transcript path and
+    /// model, replacing earlier values (`/clear` starts a new conversation).
+    pub fn apply_hook(&self, event: &str, payload: &HookPayload) {
+        tracing::debug!("hook {event} session={}", self.id);
+        if event != "SessionStart" {
+            return;
+        }
+        let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
+        info.claude_session_id.clone_from(&payload.session_id);
+        info.transcript_path.clone_from(&payload.transcript_path);
+        info.model.clone_from(&payload.model);
+    }
+
     /// Queues a request; ignored if the task has gone away.
     pub fn send(&self, cmd: Cmd) {
         let _ = self.tx.send(cmd);
@@ -91,6 +107,8 @@ pub struct Launch<'a> {
     pub id: SessionId,
     pub spec: &'a SessionSpec,
     pub sock: &'a Path,
+    /// The injected `hooks.json` passed to the child via `--settings`.
+    pub hooks: &'a Path,
     /// `(rows, cols)`.
     pub size: (u16, u16),
     pub scrollback: usize,
@@ -103,7 +121,7 @@ pub struct Launch<'a> {
 /// # Errors
 /// If the child cannot be started or its process group cannot be tracked.
 pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle> {
-    let mut sp = spawn::spawn(l.spec, &l.id, l.sock, l.size)?;
+    let mut sp = spawn::spawn(l.spec, &l.id, l.sock, l.hooks, l.size)?;
     let pgid = match i32::try_from(sp.pid)
         .map_err(anyhow::Error::from)
         .and_then(|p| nix::unistd::getpgid(Some(Pid::from_raw(p))).map_err(Into::into))
@@ -177,6 +195,7 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         profile: Some(l.spec.profile.clone()),
         status: Status::Starting,
         claude_session_id: None,
+        transcript_path: None,
         model: None,
         started_at,
         exit_code: None,
