@@ -14,3 +14,4 @@ Task 4: started
 Task 4: complete (b5fc412..ba704a4, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-4.md
   notes: [sec Low] encode_paste strip loop is O(n^2) on nested markers — prefer single-pass ESC filter; [sec Info] C1 CSI (U+009B) end marker not stripped; [sec/review] encode_mouse doesn't bound right/bottom edge despite doc; [review] Shift-Enter prefers modifyOtherKeys over kitty — confirm in Task 6 spike
+Task 5: started
