@@ -34,3 +34,4 @@ Task 9: started
 Task 9: complete (a4757f1..a322672, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-9.md
   notes: [sec MEDIUM] client connect() trusts whatever listens on socket path: no runtime-dir check, no server peer uid check; start() connects before ensure_runtime_dir — carried into Task 10; [sec Low] daemon.log perms depend on umask, state dir not checked; [sec Low] killpg on registered pgid without pgid<=1 / own-group / reaped checks; [sec Info] no idle timeout after Hello, 64x16MiB buffers; [review] stop prints extra 'daemon stopped'; SIGTERM path lacks e2e test; start racing a shutting-down daemon gives generic timeout
+Task 10: started
