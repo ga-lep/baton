@@ -11,3 +11,6 @@ Task 3: complete (bb6f558..88b4f84, gate ok, security PASS, review PASS, evidenc
   evidence: docs/plans/baton-mvp.evidence/task-3.md
   notes: [evidence] baton-drive child cwd defaults to $HOME (portable-pty CommandBuilder default) — daemon/spike MUST set cwd explicitly; [sec Low] fake-claude accepts non-UUID session ids (path traversal in test tool, real claude rejects) ; [sec Low] unquoted temp path in drive_smoke hook cmd; [sec Info] Drive Drop kills without wait (zombies); [review] malformed settings silently ignored in fake-claude
 Task 4: started
+Task 4: complete (b5fc412..ba704a4, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/baton-mvp.evidence/task-4.md
+  notes: [sec Low] encode_paste strip loop is O(n^2) on nested markers — prefer single-pass ESC filter; [sec Info] C1 CSI (U+009B) end marker not stripped; [sec/review] encode_mouse doesn't bound right/bottom edge despite doc; [review] Shift-Enter prefers modifyOtherKeys over kitty — confirm in Task 6 spike
