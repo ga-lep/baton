@@ -38,3 +38,4 @@ Task 10: started
 Task 10: complete (4f199d4..c82d1cb, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-10.md
   notes: carried-over fixes landed: client runtime-dir + server peer-uid check (Task 9 Medium), pgid guards + unregister on reap, size validation 1..=1000, scrollback clamp 10k, explicit repo cwd; [sec Low] spawn() leaks child if reader/writer setup fails after spawn; [sec Low] large scrollback/snapshot can exceed 16MiB frame -> silent disconnect; MAX_DIM 1000 x 10k scrollback memory; [sec Low] Input payload uncapped (cap ~64KiB); [sec Low] debug scrollback passes C1/BEL to terminal; [review] slow client dropped silently (client=None but conn open); open_project holds registry mutex during spawn
+Task 11: started
