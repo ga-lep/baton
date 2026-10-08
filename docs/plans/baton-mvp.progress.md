@@ -42,3 +42,4 @@ Task 11: started
 Task 11: complete (a1ddf75..bdede1c, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-11.md
   notes: M1 reached (TUI attach/focus/quit/reattach). carried-over fixes landed: Once panic hook, focus/wheel only in focus mode, Input cap 64KiB + TUI chunking, slow client kicked with Error+close; [sec Low] restart_daemon SIGTERMs SO_PEERCRED pid unchecked (pid 0 -> own pgrp; not verified to be baton) — filter pid>0, verify /proc/pid/exe; [sec Low] Output flood can kick client repeatedly (queue by frames not bytes); [sec Low] split bracketed paste failing mid-way leaves paste mode open; [review] y-restart path has no e2e test
+Task 12: started
