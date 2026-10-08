@@ -1,5 +1,6 @@
 //! Socket accept loop and per-connection protocol handling.
 
+use super::notifier::{self, Notifier, SinkKind};
 use super::registry::{CLIENT_QUEUE, ChildGroups, Registry, validate_size};
 use super::session::ClientSink;
 use baton_proto::{ClientMsg, DaemonMsg, MAX_INPUT, PROTOCOL_VERSION, decode, encode, framed};
@@ -31,8 +32,12 @@ impl State {
     /// Creates empty state.
     pub fn new() -> Self {
         let groups = Arc::new(ChildGroups::default());
+        let kind = SinkKind::parse(std::env::var(notifier::SINK_ENV).ok().as_deref());
+        // Without a usable state dir only the (stateless) D-Bus sink can work.
+        let state_dir = baton_core::paths::state_dir().unwrap_or_default();
+        let notifier = Notifier::spawn(kind.build(&state_dir));
         Self {
-            registry: Registry::new(Arc::clone(&groups)),
+            registry: Registry::new(Arc::clone(&groups), notifier),
             groups,
             next_conn: AtomicU64::new(1),
         }
@@ -244,9 +249,13 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
                 state.registry.hook(&baton_session, &event, &payload_json);
                 None
             }
-            ClientMsg::ClientView { on_screen, .. } => {
-                // `terminal_focused` is for notifications (a later task).
-                state.registry.set_view(conn_id, on_screen);
+            ClientMsg::ClientView {
+                on_screen,
+                terminal_focused,
+            } => {
+                state
+                    .registry
+                    .set_view(conn_id, on_screen, terminal_focused);
                 None
             }
             ClientMsg::MarkViewed { session } => {

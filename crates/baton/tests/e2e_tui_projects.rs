@@ -40,6 +40,7 @@ impl Env {
             ("BATON_CONFIG".into(), p("config.toml")),
             ("BATON_STATE_DIR".into(), p("state")),
             ("BATON_RUNTIME_DIR".into(), p("run")),
+            ("BATON_NOTIFY_SINK".into(), "off".into()),
         ]
     }
 

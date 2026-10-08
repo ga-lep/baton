@@ -1,6 +1,7 @@
 //! The background daemon: single instance, unix socket, handshake, clean shutdown.
 
 pub mod lifecycle;
+pub mod notifier;
 pub mod registry;
 pub mod server;
 pub mod session;

@@ -1,9 +1,11 @@
 //! The set of live sessions, the single attached client and the child
 //! process groups that must be terminated at shutdown.
 
+use super::notifier::Notifier;
 use super::session::{self, ClientSink, Cmd, SessionHandle};
 use baton_core::config::Config;
 use baton_core::hooks::{self, HookPayload};
+use baton_core::notify_rule::ClientView;
 use baton_core::paths;
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
@@ -19,6 +21,16 @@ pub const MAX_SCROLLBACK_COUNT: u32 = 10_000;
 const DEFAULT_SIZE: (u16, u16) = (24, 80);
 /// Capacity of the per-client outgoing message queue.
 pub const CLIENT_QUEUE: usize = 4096;
+
+/// Longest accepted hook event name, in bytes.
+const MAX_EVENT_NAME: usize = 64;
+
+/// Whether `name` looks like a hook event name: short ASCII alphanumerics.
+fn valid_event_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_EVENT_NAME
+        && name.bytes().all(|b| b.is_ascii_alphanumeric())
+}
 
 /// A terminal size was zero or larger than [`MAX_DIM`].
 #[derive(Debug, thiserror::Error)]
@@ -91,13 +103,14 @@ struct Inner {
     size: (u16, u16),
     nudge: bool,
     attached: Option<Attached>,
-    /// The session the attached client shows, if any.
-    view: Option<SessionId>,
+    /// What the attached client shows; `None` while no client is attached.
+    view: Option<ClientView>,
 }
 
 /// Registry of sessions and the attached client.
 pub struct Registry {
     groups: Arc<ChildGroups>,
+    notifier: Notifier,
     inner: Mutex<Inner>,
     /// Held for the whole of `open_project`, never together with `inner`
     /// while spawning.
@@ -117,9 +130,10 @@ pub enum OpenError {
 
 impl Registry {
     /// Creates an empty registry.
-    pub fn new(groups: Arc<ChildGroups>) -> Self {
+    pub fn new(groups: Arc<ChildGroups>, notifier: Notifier) -> Self {
         Self {
             groups,
+            notifier,
             inner: Mutex::new(Inner {
                 sessions: Vec::new(),
                 size: DEFAULT_SIZE,
@@ -199,6 +213,8 @@ impl Registry {
                 size,
                 scrollback: config.scrollback_lines,
                 hook_timeout: Duration::from_secs(config.hook_timeout_secs),
+                notifications: config.notifications,
+                notifier: &self.notifier,
             };
             // No registry lock here: spawning a PTY can be slow.
             match session::start(&launch, &self.groups) {
@@ -217,8 +233,8 @@ impl Registry {
                     cols: inner.size.1,
                 });
             }
-            if inner.view.as_ref() == Some(&handle.id) {
-                handle.send(Cmd::SetViewed(true));
+            if inner.view.is_some() {
+                handle.send(Cmd::SetView(inner.view.clone()));
             }
             fresh.push(handle.id.clone());
             match inner.sessions.iter().position(|s| s.id == handle.id) {
@@ -254,8 +270,14 @@ impl Registry {
     /// Applies a hook event from a Claude child to its session. Events for
     /// unknown sessions or outside the closed event set are logged and dropped.
     pub fn hook(&self, session: &SessionId, event: &str, payload_json: &str) {
+        if !valid_event_name(event) {
+            // Client-supplied: `{:?}` escapes control characters; cap the echo.
+            let shown: String = event.chars().take(MAX_EVENT_NAME).collect();
+            tracing::debug!("dropping hook with invalid event name {shown:?}");
+            return;
+        }
         if !hooks::is_known_event(event) {
-            tracing::debug!("dropping hook with unknown event");
+            tracing::debug!("dropping hook with unknown event {event:?}");
             return;
         }
         let payload = HookPayload::parse(payload_json);
@@ -263,21 +285,28 @@ impl Registry {
         match inner.sessions.iter().find(|s| &s.id == session) {
             Some(s) => s.hook(event, payload),
             // The id is client-supplied: `{:?}` escapes control characters.
-            None => tracing::debug!("dropping hook {event} for unknown session {:?}", session.0),
+            None => tracing::debug!(
+                "dropping hook {event:?} for unknown session {:?}",
+                session.0
+            ),
         }
     }
 
     /// Records which session the attached client `conn` shows and tells every
     /// session whether it is on screen. Other connections are ignored.
-    pub fn set_view(&self, conn: u64, on_screen: Option<SessionId>) {
+    pub fn set_view(&self, conn: u64, on_screen: Option<SessionId>, terminal_focused: bool) {
         let mut inner = self.lock();
         if inner.attached.as_ref().is_none_or(|a| a.conn != conn) {
             return;
         }
+        let view = ClientView {
+            on_screen,
+            terminal_focused,
+        };
         for s in &inner.sessions {
-            s.send(Cmd::SetViewed(on_screen.as_ref() == Some(&s.id)));
+            s.send(Cmd::SetView(Some(view.clone())));
         }
-        inner.view = on_screen;
+        inner.view = Some(view);
     }
 
     /// Marks a session as seen, as if the user had looked at it.
@@ -325,11 +354,16 @@ impl Registry {
             });
         }
         inner.size = (rows, cols);
-        inner.view = None; // the new client has not said what it shows yet
+        // The new client has not said what it shows yet; assume it is focused.
+        let view = ClientView {
+            on_screen: None,
+            terminal_focused: true,
+        };
+        inner.view = Some(view.clone());
         let list = inner.sessions.iter().map(SessionHandle::info).collect();
         sink.send(DaemonMsg::SessionList(list));
         for s in &inner.sessions {
-            s.send(Cmd::SetViewed(false));
+            s.send(Cmd::SetView(Some(view.clone())));
             s.send(Cmd::Resize { rows, cols });
             s.send(Cmd::Attach {
                 sink: sink.clone(),
@@ -345,7 +379,7 @@ impl Registry {
             inner.attached = None;
             inner.view = None;
             for s in &inner.sessions {
-                s.send(Cmd::SetViewed(false));
+                s.send(Cmd::SetView(None));
             }
         }
     }
@@ -384,6 +418,17 @@ fn find<'a>(inner: &'a Inner, id: &SessionId) -> Result<&'a SessionHandle, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_names_are_short_ascii_alphanumerics() {
+        assert!(valid_event_name("PreToolUse"));
+        assert!(valid_event_name(&"a".repeat(MAX_EVENT_NAME)));
+        assert!(!valid_event_name(""));
+        assert!(!valid_event_name(&"a".repeat(MAX_EVENT_NAME + 1)));
+        for bad in ["Stop\n", "St op", "Stop\u{1b}[2J", "Sto-p", "Stöp"] {
+            assert!(!valid_event_name(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn sizes_outside_1_to_1000_are_rejected() {

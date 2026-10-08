@@ -36,6 +36,7 @@ impl Env {
             .env("BATON_CONFIG", self.dir.path().join("config.toml"))
             .env("BATON_STATE_DIR", self.dir.path().join("state"))
             .env("BATON_RUNTIME_DIR", self.dir.path().join("run"))
+            .env("BATON_NOTIFY_SINK", "off")
             .env("FAKE_CLAUDE_HOME", self.dir.path().join("fake-claude"))
             .env_remove("BATON_SESSION")
             .env_remove("BATON_SOCK")

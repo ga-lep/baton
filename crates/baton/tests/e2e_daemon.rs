@@ -36,6 +36,7 @@ impl Env {
             .env("BATON_CONFIG", self.dir.path().join("config.toml"))
             .env("BATON_STATE_DIR", self.dir.path().join("state"))
             .env("BATON_RUNTIME_DIR", self.run_dir())
+            .env("BATON_NOTIFY_SINK", "off")
             .stdin(std::process::Stdio::null())
             .output()?)
     }

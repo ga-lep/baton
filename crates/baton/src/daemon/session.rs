@@ -1,5 +1,6 @@
 //! One session: a PTY child, its authoritative screen and the attached client.
 
+use super::notifier::{Notification, Notifier};
 use super::registry::ChildGroups;
 use super::spawn;
 use crate::term::screen::Screen;
@@ -7,6 +8,7 @@ use crate::term::vt100_screen::Vt100Screen;
 use anyhow::{Result, bail};
 use baton_core::config::SessionSpec;
 use baton_core::hooks::HookPayload;
+use baton_core::notify_rule::{self, ClientView};
 use baton_core::status::{self, Input};
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
@@ -50,8 +52,8 @@ pub enum Cmd {
         event: String,
         payload: HookPayload,
     },
-    /// Whether the attached client has this session on screen.
-    SetViewed(bool),
+    /// What the attached client shows; `None` when no client is attached.
+    SetView(Option<ClientView>),
     /// The user explicitly marks the session as seen.
     MarkViewed,
 }
@@ -119,6 +121,9 @@ pub struct Launch<'a> {
     pub scrollback: usize,
     /// How long a live session may stay `Starting` before it is `Unknown`.
     pub hook_timeout: Duration,
+    /// Whether desktop notifications are enabled (`notifications` in the config).
+    pub notifications: bool,
+    pub notifier: &'a Notifier,
 }
 
 /// Spawns the child, its helper threads and the session task.
@@ -217,7 +222,14 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         client: None,
         exited: false,
         status: Status::Starting,
-        viewed: false,
+        view: None,
+        notifications: l.notifications,
+        notifier: l.notifier.clone(),
+        project: l.spec.project.clone(),
+        repo_name: l.spec.repo.file_name().map_or_else(
+            || l.spec.repo.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
         deadline: Some(Instant::now() + l.hook_timeout),
     };
     tokio::spawn(task.run(cmd_rx, out_rx));
@@ -243,8 +255,13 @@ struct Task {
     client: Option<ClientSink>,
     exited: bool,
     status: Status,
-    /// The attached client has this session on screen.
-    viewed: bool,
+    /// What the attached client shows; `None` when none is attached.
+    view: Option<ClientView>,
+    notifications: bool,
+    notifier: Notifier,
+    project: String,
+    /// Last path component of the repo, for notification summaries.
+    repo_name: String,
     /// When a session still `Starting` becomes `Unknown`; cleared once fired.
     deadline: Option<Instant>,
 }
@@ -301,8 +318,8 @@ impl Task {
                 let _ = reply.send(self.screen.scrollback_rows(start, count));
             }
             Cmd::Hook { event, payload } => self.on_hook(&event, payload),
-            Cmd::SetViewed(on_screen) => {
-                self.viewed = on_screen;
+            Cmd::SetView(view) => {
+                self.view = view;
                 self.apply(Input::Viewed);
             }
             Cmd::MarkViewed => self.apply(Input::Viewed),
@@ -380,7 +397,7 @@ impl Task {
 
     fn on_hook(&mut self, event: &str, payload: HookPayload) {
         // The id is client-chosen text: `{:?}` keeps control characters out.
-        tracing::debug!("hook {event} session={:?}", self.id.0);
+        tracing::debug!("hook {event:?} session={:?}", self.id.0);
         if event == "SessionStart" {
             // Every SessionStart replaces the previous values (`/clear` makes a
             // new conversation); invalid fields are dropped, not stored.
@@ -404,7 +421,10 @@ impl Task {
         if fx.unrecognized {
             tracing::debug!(session = ?self.id.0, "ignoring unrecognized hook input {input:?}");
         }
-        if self.viewed {
+        // Decided on the status before the viewed shortcut: a `Stop` seen live
+        // in an unfocused terminal still deserves a notification.
+        self.maybe_notify(before, to);
+        if self.on_screen() {
             to = status::next(to, Input::Viewed).0;
         }
         if to == before {
@@ -415,6 +435,29 @@ impl Task {
         self.forward(DaemonMsg::StatusChanged {
             session: self.id.clone(),
             status: to,
+        });
+    }
+
+    /// The attached client has this session on screen.
+    fn on_screen(&self) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|v| v.on_screen.as_ref() == Some(&self.id))
+    }
+
+    fn maybe_notify(&self, before: Status, to: Status) {
+        if !notify_rule::should_notify(before, to, self.view.as_ref(), &self.id, self.notifications)
+        {
+            return;
+        }
+        let Some(summary) = notify_rule::summary(&self.repo_name, to) else {
+            return;
+        };
+        self.notifier.send(Notification {
+            session: self.id.clone(),
+            status: to,
+            summary,
+            body: notify_rule::sanitize(&self.project),
         });
     }
 
