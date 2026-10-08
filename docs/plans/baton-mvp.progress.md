@@ -58,3 +58,4 @@ Task 15: started
 Task 15: complete (453e01a..e20d22b, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-15.md
   notes: M3 reached (notifications via log sink only; real D-Bus not exercised, user asleep). carried-over: hook event name validation (1..64 ASCII alnum) + {:?} logging; all daemon-starting tests set BATON_NOTIFY_SINK=off; [evidence] long BATON_RUNTIME_DIR -> 'path must be shorter than SUN_LEN' on bind — consider a clear error message; [sec Low] notification text: escape <>& for markup servers, drop Unicode Cf (bidi/zero-width); [sec Low] LogSink falls back to ./ when state_dir fails, no O_NOFOLLOW; [review] unknown BATON_NOTIFY_SINK value (typo) silently means real D-Bus — warn
+Task 16: started
