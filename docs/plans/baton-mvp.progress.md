@@ -54,3 +54,4 @@ Task 14: started
 Task 14: complete (24ed80c..363280e, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-14.md
   notes: M3a status/attention. carried-over: SessionStart field validation (len caps, no control chars, absolute path) + {:?} id logging; baton-core now depends on baton-proto; terminal_focused sent but unused (for Task 15); [sec Low] hook event name logged unescaped ({event:?}); hook cmds on unbounded channel — cap event len / bounded try_send; [sec NOTE for Task 17] transcript_path accepts any absolute path — canonicalize and require under <profile config dir>/projects before reading
+Task 15: started
