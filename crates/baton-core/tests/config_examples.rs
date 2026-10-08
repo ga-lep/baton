@@ -176,3 +176,10 @@ fn missing_file_is_empty_config() {
     let c = Config::load(&d.path().join("nope.toml"), &env).expect("empty");
     assert!(c.projects.is_empty());
 }
+
+#[test]
+fn attach_redraw_nudge_defaults_on_and_can_be_disabled() {
+    assert!(parse("").expect("empty").attach_redraw_nudge);
+    let c = parse("attach_redraw_nudge = false").expect("parses");
+    assert!(!c.attach_redraw_nudge);
+}

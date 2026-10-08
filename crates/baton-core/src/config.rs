@@ -81,6 +81,7 @@ struct RawConfig {
     notifications: Option<bool>,
     scrollback_lines: Option<usize>,
     hook_timeout_secs: Option<u64>,
+    attach_redraw_nudge: Option<bool>,
     #[serde(default)]
     profiles: BTreeMap<String, RawProfile>,
     #[serde(default)]
@@ -153,6 +154,8 @@ pub struct Config {
     pub scrollback_lines: usize,
     /// Timeout after which a session with no hook activity becomes `unknown`.
     pub hook_timeout_secs: u64,
+    /// Whether attaching nudges sessions to redraw (resize to `cols-1` then `cols`).
+    pub attach_redraw_nudge: bool,
     /// Projects in file order.
     pub projects: Vec<Project>,
     /// Price table.
@@ -168,6 +171,7 @@ impl Default for Config {
             notifications: true,
             scrollback_lines: 10_000,
             hook_timeout_secs: 20,
+            attach_redraw_nudge: true,
             projects: Vec::new(),
             pricing: Pricing::default(),
             keybindings: BTreeMap::new(),
@@ -285,6 +289,9 @@ impl Config {
             notifications: raw.notifications.unwrap_or(defaults.notifications),
             scrollback_lines: raw.scrollback_lines.unwrap_or(defaults.scrollback_lines),
             hook_timeout_secs: raw.hook_timeout_secs.unwrap_or(defaults.hook_timeout_secs),
+            attach_redraw_nudge: raw
+                .attach_redraw_nudge
+                .unwrap_or(defaults.attach_redraw_nudge),
             projects,
             pricing: raw.pricing,
             keybindings: raw.keybindings,

@@ -43,6 +43,8 @@ fn start_foreground() -> anyhow::Result<u8> {
 }
 
 async fn start() -> anyhow::Result<u8> {
+    // The runtime dir must be private before anything is connected to or bound.
+    paths::ensure_runtime_dir()?;
     match client::connect(Role::Ctl).await {
         Ok(conn) => {
             println!("daemon already running pid={}", conn.pid);
@@ -51,8 +53,6 @@ async fn start() -> anyhow::Result<u8> {
         Err(ClientError::NotRunning) => {}
         Err(e) => return Err(e.into()),
     }
-    // Refuse early (before detaching) if the runtime dir is unusable.
-    paths::ensure_runtime_dir()?;
     client::spawn_detached_foreground()?;
     let conn = client::connect_with_retry(Role::Ctl, client::START_TIMEOUT).await?;
     println!("daemon started pid={}", conn.pid);

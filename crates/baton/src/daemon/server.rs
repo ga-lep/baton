@@ -1,12 +1,13 @@
 //! Socket accept loop and per-connection protocol handling.
 
+use super::registry::{CLIENT_QUEUE, ChildGroups, Registry, validate_size};
 use baton_proto::{ClientMsg, DaemonMsg, PROTOCOL_VERSION, decode, encode, framed};
 use futures_util::{SinkExt, StreamExt};
-use nix::unistd::Pid;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 /// A client must send `Hello` within this long.
@@ -15,30 +16,28 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONNECTIONS: usize = 64;
 
 /// Shared daemon state.
-#[derive(Default)]
 pub struct State {
-    child_groups: Mutex<Vec<Pid>>,
+    /// Process groups to terminate at shutdown.
+    pub groups: Arc<ChildGroups>,
+    /// Live sessions and the attached client.
+    pub registry: Registry,
+    next_conn: AtomicU64,
 }
 
 impl State {
-    /// Records a child process group to terminate at shutdown.
-    #[allow(dead_code)] // used by the session runtime in a later task
-    pub fn register_child_group(&self, pgid: Pid) {
-        self.groups().push(pgid);
-    }
-
-    /// Takes all registered child process groups.
-    pub fn take_child_groups(&self) -> Vec<Pid> {
-        std::mem::take(&mut *self.groups())
-    }
-
-    fn groups(&self) -> std::sync::MutexGuard<'_, Vec<Pid>> {
-        self.child_groups.lock().unwrap_or_else(|e| e.into_inner())
+    /// Creates empty state.
+    pub fn new() -> Self {
+        let groups = Arc::new(ChildGroups::default());
+        Self {
+            registry: Registry::new(Arc::clone(&groups)),
+            groups,
+            next_conn: AtomicU64::new(1),
+        }
     }
 }
 
 /// Accepts connections until `shutdown` is cancelled.
-pub async fn serve(listener: UnixListener, shutdown: CancellationToken) {
+pub async fn serve(listener: UnixListener, shutdown: CancellationToken, state: Arc<State>) {
     let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
         let stream = tokio::select! {
@@ -60,8 +59,9 @@ pub async fn serve(listener: UnixListener, shutdown: CancellationToken) {
             continue;
         };
         let shutdown = shutdown.clone();
+        let state = Arc::clone(&state);
         tokio::spawn(async move {
-            handle(stream, &shutdown).await;
+            handle(stream, &shutdown, &state).await;
             drop(permit);
         });
     }
@@ -111,7 +111,7 @@ async fn recv(conn: &mut Conn) -> Option<ClientMsg> {
     }
 }
 
-async fn handle(stream: UnixStream, shutdown: &CancellationToken) {
+async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State) {
     let mut conn = framed(stream);
     // Hello.role is informational only; authorization is the uid check.
     match tokio::time::timeout(HELLO_TIMEOUT, recv(&mut conn)).await {
@@ -136,33 +136,91 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken) {
         }
         _ => return,
     }
+    let conn_id = state.next_conn.fetch_add(1, Ordering::Relaxed);
+    // The stream channel exists once attached; only the registry and the
+    // sessions hold senders, so a takeover closes it and ends this connection.
+    let mut stream_rx = mpsc::channel::<DaemonMsg>(1).1;
+    let mut attached = false;
     loop {
         let msg = tokio::select! {
-            () = shutdown.cancelled() => return,
+            () = shutdown.cancelled() => break,
+            streamed = stream_rx.recv(), if attached => match streamed {
+                Some(m) => {
+                    if !send(&mut conn, &m).await {
+                        break;
+                    }
+                    continue;
+                }
+                None => break,
+            },
             m = recv(&mut conn) => match m {
                 Some(m) => m,
-                None => return,
+                None => break,
             },
         };
         let reply = match msg {
-            ClientMsg::Status => DaemonMsg::DaemonStatus {
+            ClientMsg::Status => Some(DaemonMsg::DaemonStatus {
                 pid: std::process::id(),
                 version: PROTOCOL_VERSION,
-                sessions: Vec::new(),
-            },
+                sessions: state.registry.list(),
+            }),
             ClientMsg::Shutdown => {
                 tracing::info!("shutdown requested");
                 shutdown.cancel();
-                return;
+                break;
             }
-            ClientMsg::Detach => return,
-            ClientMsg::Hello { .. } => return, // second Hello is a protocol violation
-            _ => DaemonMsg::Error {
-                message: "not supported yet".into(),
+            ClientMsg::Detach | ClientMsg::Hello { .. } => break, // Hello again: protocol violation
+            ClientMsg::OpenProject { name } => Some(match state.registry.open_project(&name) {
+                Ok(list) => DaemonMsg::SessionList(list),
+                Err(e) => error(e),
+            }),
+            ClientMsg::Attach { rows, cols } => match validate_size(rows, cols) {
+                Ok((rows, cols)) => {
+                    let (tx, rx) = mpsc::channel(CLIENT_QUEUE);
+                    stream_rx = rx;
+                    attached = true;
+                    state.registry.attach(conn_id, rows, cols, &tx);
+                    None
+                }
+                Err(e) => Some(error(e)),
             },
+            ClientMsg::Resize { rows, cols } => match validate_size(rows, cols) {
+                Ok((rows, cols)) => {
+                    state.registry.resize_all(rows, cols);
+                    None
+                }
+                Err(e) => Some(error(e)),
+            },
+            ClientMsg::Input { session, bytes } => {
+                state.registry.input(&session, bytes).err().map(error)
+            }
+            ClientMsg::GetScrollback {
+                session,
+                start,
+                count,
+            } => Some(
+                match state.registry.scrollback(&session, start, count).await {
+                    Ok(rows) => DaemonMsg::Scrollback {
+                        session,
+                        start,
+                        rows,
+                    },
+                    Err(e) => error(e),
+                },
+            ),
+            _ => Some(error("not supported yet")),
         };
-        if !send(&mut conn, &reply).await {
-            return;
+        if let Some(reply) = reply
+            && !send(&mut conn, &reply).await
+        {
+            break;
         }
+    }
+    state.registry.detach(conn_id);
+}
+
+fn error(e: impl ToString) -> DaemonMsg {
+    DaemonMsg::Error {
+        message: e.to_string(),
     }
 }

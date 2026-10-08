@@ -7,6 +7,7 @@ use baton_proto::{
 use futures_util::{SinkExt, StreamExt};
 use std::io;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tokio::net::UnixStream;
@@ -24,6 +25,8 @@ pub enum ClientError {
         "protocol version mismatch (daemon speaks {daemon_version}, client {PROTOCOL_VERSION})"
     )]
     VersionMismatch { daemon_version: u32 },
+    #[error("refusing to talk to a socket served by uid {server_uid} (expected {expected_uid})")]
+    UntrustedServer { server_uid: u32, expected_uid: u32 },
     #[error("daemon closed the connection")]
     Closed,
     #[error("unexpected reply from daemon: {0:?}")]
@@ -65,15 +68,34 @@ impl Conn {
 
 /// Connects to the daemon socket and performs the `Hello` handshake.
 ///
+/// The runtime directory must be private (see [`paths::ensure_runtime_dir`])
+/// before anything is connected to, and the server must run as our user.
+///
 /// # Errors
-/// [`ClientError::NotRunning`] if nothing is listening, or any handshake failure.
+/// [`ClientError::NotRunning`] if nothing is listening,
+/// [`ClientError::UntrustedServer`] if another user serves the socket, or any
+/// directory-check or handshake failure.
 pub async fn connect(role: Role) -> Result<Conn, ClientError> {
-    let stream = UnixStream::connect(paths::socket_path())
+    paths::ensure_runtime_dir()?;
+    connect_at(&paths::socket_path(), role, nix::unistd::getuid().as_raw()).await
+}
+
+/// Connects to the socket at `path`, requiring the server's uid to be
+/// `expected_uid` (checked before any byte is sent).
+async fn connect_at(path: &Path, role: Role, expected_uid: u32) -> Result<Conn, ClientError> {
+    let stream = UnixStream::connect(path)
         .await
         .map_err(|e| match e.kind() {
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => ClientError::NotRunning,
             _ => ClientError::Io(e),
         })?;
+    let server_uid = stream.peer_cred()?.uid();
+    if server_uid != expected_uid {
+        return Err(ClientError::UntrustedServer {
+            server_uid,
+            expected_uid,
+        });
+    }
     let mut conn = Conn {
         framed: framed(stream),
         pid: 0,
@@ -151,7 +173,6 @@ pub async fn connect_with_retry(role: Role, timeout: Duration) -> Result<Conn, C
 ///
 /// # Errors
 /// If the daemon cannot be spawned or never accepts the connection.
-#[allow(dead_code)] // used by the TUI and hook clients in later tasks
 pub async fn ensure_daemon(role: Role) -> Result<Conn, ClientError> {
     match connect(role).await {
         Err(ClientError::NotRunning) => {
@@ -161,5 +182,53 @@ pub async fn ensure_daemon(role: Role) -> Result<Conn, ClientError> {
             connect_with_retry(role, START_TIMEOUT).await
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::UnixListener;
+
+    fn serve_one(listener: UnixListener) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            // Accept and hold the connection open, never answering.
+            if let Ok((s, _)) = listener.accept().await {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                drop(s);
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn refuses_a_server_running_as_another_uid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sock");
+        let server = serve_one(UnixListener::bind(&path).unwrap());
+        let ours = nix::unistd::getuid().as_raw();
+        // Pretend we expect a different user: the real server (us) is untrusted.
+        let r = connect_at(&path, Role::Ctl, ours.wrapping_add(1)).await;
+        assert!(
+            matches!(r, Err(ClientError::UntrustedServer { server_uid, .. }) if server_uid == ours),
+            "{:?}",
+            r.err()
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn same_uid_server_gets_past_the_peer_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sock");
+        let _server = serve_one(UnixListener::bind(&path).unwrap());
+        let ours = nix::unistd::getuid().as_raw();
+        // The fake server never answers Hello, so the handshake fails later
+        // (EOF or reset), but never with a uid error.
+        let r = connect_at(&path, Role::Ctl, ours).await;
+        assert!(
+            matches!(r, Err(ClientError::Closed | ClientError::Io(_))),
+            "{:?}",
+            r.err()
+        );
     }
 }

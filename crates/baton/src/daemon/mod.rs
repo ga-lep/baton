@@ -1,7 +1,10 @@
 //! The background daemon: single instance, unix socket, handshake, clean shutdown.
 
 pub mod lifecycle;
+pub mod registry;
 pub mod server;
+pub mod session;
+pub mod spawn;
 
 use anyhow::{Context, Result};
 use baton_core::paths;
@@ -57,11 +60,11 @@ async fn serve_until_shutdown(run_dir: &std::path::Path) -> Result<()> {
     let listener = lifecycle::bind_socket(&sock).context("binding socket")?;
     tracing::info!(pid = std::process::id(), "daemon listening");
 
-    let state = Arc::new(server::State::default());
+    let state = Arc::new(server::State::new());
     let shutdown = CancellationToken::new();
     let mut term = signal(SignalKind::terminate()).context("SIGTERM handler")?;
     let mut int = signal(SignalKind::interrupt()).context("SIGINT handler")?;
-    let serving = server::serve(listener, shutdown.clone());
+    let serving = server::serve(listener, shutdown.clone(), Arc::clone(&state));
     tokio::pin!(serving);
     tokio::select! {
         () = &mut serving => {}
@@ -69,7 +72,7 @@ async fn serve_until_shutdown(run_dir: &std::path::Path) -> Result<()> {
         _ = int.recv() => tracing::info!("SIGINT received"),
     }
     shutdown.cancel();
-    let groups = state.take_child_groups();
+    let groups = state.groups.take();
     lifecycle::terminate_groups(&groups, KILL_GRACE).await;
     lifecycle::remove_socket(&sock);
     tracing::info!("daemon stopped");

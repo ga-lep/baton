@@ -36,6 +36,7 @@ fn run(cli: Cli) -> ExitCode {
             action: ConfigAction::Check,
         }) => cmd::config::check(),
         Some(Command::Daemon { action }) => cmd::daemon::run(&action),
+        Some(Command::Debug { args }) => cmd::debug::run(&args),
         _ => not_implemented(),
     }
 }
