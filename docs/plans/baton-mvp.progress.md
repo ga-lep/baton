@@ -15,3 +15,6 @@ Task 4: complete (b5fc412..ba704a4, gate ok, security PASS, review PASS, evidenc
   evidence: docs/plans/baton-mvp.evidence/task-4.md
   notes: [sec Low] encode_paste strip loop is O(n^2) on nested markers — prefer single-pass ESC filter; [sec Info] C1 CSI (U+009B) end marker not stripped; [sec/review] encode_mouse doesn't bound right/bottom edge despite doc; [review] Shift-Enter prefers modifyOtherKeys over kitty — confirm in Task 6 spike
 Task 5: started
+Task 5: complete (d6a33ca..3b1c604, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/baton-mvp.evidence/task-5.md
+  notes: [sec MEDIUM] Vt100Screen new/resize with 0 rows/cols panics (debug) or wraps (release) in vt100 Grid::set_size; scrollback_rows loops forever when rows==0 — clamp .max(1) (carry into Task 6); [sec Low] window title not sanitized/capped (strip controls, cap 256); [sec Info] document snapshot() not safe to write to host terminal; [review] snapshot/scrollback take &mut self; view offset restore untested
