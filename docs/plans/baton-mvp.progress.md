@@ -26,3 +26,4 @@ Task 7: started
 Task 7: complete (b47245e..40a19d5, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-7.md
   notes: [sec Low] for daemon tasks: socket dir 0700 + sock 0600 + SO_PEERCRED uid check, Hello.role not an authz signal; validate Resize/Attach rows/cols (0 or >1000) and clamp GetScrollback count; [sec Low] SessionId::from_repo lossy on non-UTF-8 paths, '/' in project names ambiguous; [sec Info] atomic-polyfill unmaintained via postcard->heapless; [review] encode returns Result (deliberate), trailing bytes reported as SerdeDeCustom
+Task 8: started
