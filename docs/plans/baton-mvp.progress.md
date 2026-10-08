@@ -50,3 +50,4 @@ Task 13: started
 Task 13: complete (c12da7f..ada5c45, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-13.md
   notes: hook contract: hooks.json (9 events, 0600, atomic, POSIX-quoted exe) passed via --settings after profile argv; baton hook silent+exit 0 in all cases; PROTOCOL_VERSION->2 (SessionInfo.transcript_path); test bash profiles use '-s --' since --settings always injected (wrapper profiles like 'sh -c'/'ssh' would swallow the flag); real-claude SessionStart not exercised; [sec Low] SessionStart session_id/transcript_path/model stored unvalidated/unbounded — validate (len, no control chars, absolute path, under projects dir) before Task 17 tails transcript; [sec Low] connect_to doc overstates check for BATON_SOCK override; [sec Info] log session id with {:?}; [review] CONNECT_DEADLINE 250ms vs spec 200ms
+Task 14: started
