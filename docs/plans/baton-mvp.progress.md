@@ -6,3 +6,4 @@ Task 2: started
 Task 2: complete (9aa50a6..1b7386a, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-2.md
   notes: [sec Low] scanner stays in OSC/DCS string on ESC+non-\ (diverges from vt100/ECMA-48; could leave sync_output stale) and ignores 8-bit C1 — fix when wiring Screen (Task 5); [sec Info] query replies unthrottled — consider rate limit in daemon; [review] kitty_pop(0) no-op, colon sub-params unparsed
+Task 3: started
