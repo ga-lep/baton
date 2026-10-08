@@ -7,3 +7,14 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+nix = { workspace = true, features = ["user"] }
+serde = { workspace = true, features = ["derive"] }
+shell-words = "1.1.1"
+shellexpand = "3.1.2"
+thiserror.workspace = true
+toml = "1.1.7"
+
+[dev-dependencies]
+tempfile.workspace = true

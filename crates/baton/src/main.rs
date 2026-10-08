@@ -1,13 +1,14 @@
 //! `baton` binary entry point.
 
 mod cli;
+mod cmd;
 mod spike;
 #[allow(dead_code)] // consumed by the TUI client in later tasks
 mod term;
 mod tui;
 
 use clap::Parser;
-use cli::{Cli, Command};
+use cli::{Cli, Command, ConfigAction};
 use std::process::ExitCode;
 
 /// Exit code for subcommands that are not implemented yet.
@@ -28,6 +29,9 @@ fn run(cli: Cli) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some(Command::Config {
+            action: ConfigAction::Check,
+        }) => cmd::config::check(),
         _ => not_implemented(),
     }
 }
