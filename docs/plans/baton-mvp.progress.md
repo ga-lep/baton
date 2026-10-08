@@ -46,3 +46,4 @@ Task 12: started
 Task 12: complete (993422b..2e94676, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-12.md
   notes: M2 reached. carried-over fixes landed: restart_daemon pid>0 + /proc/pid/exe match, open_project no longer holds registry lock across spawn (open_gate); server suppresses OpenProject reply for attached conns (evidence: opening 2nd project keeps 1st's sessions); implementer skipped strict red-first on e2e; [review Warn] no direct test for reply suppression/open_gate; scrollback refetches whole history per scroll session; Loading state stuck if GetScrollback errors; [sec Low] pid reuse window in restart_daemon (pidfd would fix); ' (deleted)' suffix match is textual
+Task 13: started
