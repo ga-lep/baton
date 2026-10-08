@@ -22,3 +22,4 @@ Task 6: started
 Task 6: complete (41b6ab2..66570ab, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-6.md
   notes: M0 GO for vt100 (flicker + full color check need a human on a real terminal); real-claude runs added a trust entry for a scratch dir in ~/.claude-personal; Shift-Enter: all 4 encodings accepted, modifyOtherKeys kept first; [sec Low] child inherits full env + PATH lookup of claude; [sec/review] panic hook chained on every TerminalGuard::enter (use Once); [review] wheel/focus forwarded in normal mode too
+Task 7: started
