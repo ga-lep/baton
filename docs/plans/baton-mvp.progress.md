@@ -19,3 +19,6 @@ Task 5: complete (d6a33ca..3b1c604, gate ok, security PASS, review PASS, evidenc
   evidence: docs/plans/baton-mvp.evidence/task-5.md
   notes: [sec MEDIUM] Vt100Screen new/resize with 0 rows/cols panics (debug) or wraps (release) in vt100 Grid::set_size; scrollback_rows loops forever when rows==0 — clamp .max(1) (carry into Task 6); [sec Low] window title not sanitized/capped (strip controls, cap 256); [sec Info] document snapshot() not safe to write to host terminal; [review] snapshot/scrollback take &mut self; view offset restore untested
 Task 6: started
+Task 6: complete (41b6ab2..66570ab, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/baton-mvp.evidence/task-6.md
+  notes: M0 GO for vt100 (flicker + full color check need a human on a real terminal); real-claude runs added a trust entry for a scratch dir in ~/.claude-personal; Shift-Enter: all 4 encodings accepted, modifyOtherKeys kept first; [sec Low] child inherits full env + PATH lookup of claude; [sec/review] panic hook chained on every TerminalGuard::enter (use Once); [review] wheel/focus forwarded in normal mode too
