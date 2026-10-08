@@ -122,11 +122,20 @@ fn ctrl_backslash_in_both_forms_returns_to_normal_and_is_not_forwarded() {
 fn q_in_normal_mode_quits_and_selection_moves_with_j_k() {
     let mut app = app();
     app.on_event(key(KeyCode::Char('j')), HOST);
-    assert_eq!(app.selected, 1);
+    assert_eq!(
+        app.selected_session().map(|s| s.id.0.as_str()),
+        Some("x//b")
+    );
     app.on_event(key(KeyCode::Char('j')), HOST);
-    assert_eq!(app.selected, 1);
+    assert_eq!(
+        app.selected_session().map(|s| s.id.0.as_str()),
+        Some("x//b")
+    );
     app.on_event(key(KeyCode::Up), HOST);
-    assert_eq!(app.selected, 0);
+    assert_eq!(
+        app.selected_session().map(|s| s.id.0.as_str()),
+        Some("x//a")
+    );
     assert_eq!(
         app.on_event(key(KeyCode::Char('q')), HOST),
         vec![Effect::Quit]
@@ -317,4 +326,237 @@ fn status_changes_and_session_list_updates_keep_the_selection() {
         app.selected_session().map(|s| s.id.0.as_str()),
         Some("x//b")
     );
+}
+
+// ---- Task 12: project tree, open project, switching, scrollback ----
+
+use crate::tui::scrollback::PAGE;
+use crate::tui::sidebar::Cursor;
+
+/// `app()` plus configured projects `x` (open) and `y` (closed).
+fn tree_app() -> App {
+    let mut app = app();
+    app.set_projects(vec!["x".into(), "y".into()]);
+    app
+}
+
+fn ch(c: char) -> Event {
+    key(KeyCode::Char(c))
+}
+
+fn ctrl(c: char) -> Event {
+    Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+}
+
+fn cursor_is(app: &App, c: Cursor) {
+    assert_eq!(app.cursor(), Some(&c));
+}
+
+fn shown(app: &App) -> Option<&str> {
+    app.selected_session().map(|s| s.id.0.as_str())
+}
+
+#[test]
+fn cursor_starts_on_the_first_session_and_walks_projects_and_sessions() {
+    let mut app = tree_app();
+    cursor_is(&app, Cursor::Session(sid("x//a")));
+    app.on_event(ch('j'), HOST);
+    cursor_is(&app, Cursor::Session(sid("x//b")));
+    app.on_event(key(KeyCode::Down), HOST);
+    cursor_is(&app, Cursor::Project("y".into()));
+    // The main panel keeps the last session while the cursor is on a project.
+    assert_eq!(shown(&app), Some("x//b"));
+    app.on_event(ch('j'), HOST);
+    cursor_is(&app, Cursor::Project("y".into()));
+    app.on_event(ch('k'), HOST);
+    app.on_event(key(KeyCode::Up), HOST);
+    app.on_event(ch('k'), HOST);
+    cursor_is(&app, Cursor::Project("x".into()));
+    assert_eq!(shown(&app), Some("x//a"));
+}
+
+#[test]
+fn enter_and_l_focus_sessions_and_open_closed_projects() {
+    for open in [KeyCode::Enter, KeyCode::Char('l')] {
+        let mut app = tree_app();
+        app.on_event(key(open), HOST);
+        assert_eq!(app.mode, Mode::Focus);
+    }
+    let mut app = tree_app();
+    app.on_event(ch('j'), HOST);
+    app.on_event(ch('j'), HOST);
+    let fx = app.on_event(key(KeyCode::Enter), HOST);
+    assert_eq!(
+        fx,
+        vec![Effect::Send(ClientMsg::OpenProject { name: "y".into() })]
+    );
+    assert_eq!(app.mode, Mode::Normal);
+    // On an open project, Enter steps into its first session.
+    let mut app = tree_app();
+    app.on_event(ch('k'), HOST);
+    cursor_is(&app, Cursor::Project("x".into()));
+    assert!(app.on_event(key(KeyCode::Enter), HOST).is_empty());
+    cursor_is(&app, Cursor::Session(sid("x//a")));
+}
+
+#[test]
+fn o_opens_the_project_under_the_cursor() {
+    let mut app = tree_app();
+    let open = |n: &str| vec![Effect::Send(ClientMsg::OpenProject { name: n.into() })];
+    assert_eq!(app.on_event(ch('o'), HOST), open("x"));
+    app.on_event(ch('j'), HOST);
+    app.on_event(ch('j'), HOST);
+    assert_eq!(app.on_event(ch('o'), HOST), open("y"));
+}
+
+#[test]
+fn digits_select_the_nth_session_of_the_current_project() {
+    let mut app = tree_app();
+    app.on_event(ch('2'), HOST);
+    assert_eq!(shown(&app), Some("x//b"));
+    cursor_is(&app, Cursor::Session(sid("x//b")));
+    app.on_event(ch('1'), HOST);
+    assert_eq!(shown(&app), Some("x//a"));
+    // No third session: nothing changes.
+    app.on_event(ch('3'), HOST);
+    assert_eq!(shown(&app), Some("x//a"));
+    // Digits are data in focus mode.
+    app.on_event(key(KeyCode::Enter), HOST);
+    let fx = app.on_event(ch('2'), HOST);
+    assert_eq!(sent(&fx), vec![(sid("x//a"), b"2".to_vec())]);
+}
+
+#[test]
+fn a_session_list_for_a_new_project_keeps_the_cursor() {
+    let mut app = tree_app();
+    app.on_event(ch('j'), HOST);
+    app.on_event(ch('j'), HOST);
+    let mut list = app.sessions.clone();
+    let mut y = info("y//c", Status::Starting);
+    y.project = "y".into();
+    list.push(y);
+    app.on_daemon(DaemonMsg::SessionList(list), Instant::now());
+    cursor_is(&app, Cursor::Project("y".into()));
+    assert_eq!(shown(&app), Some("x//b"));
+}
+
+fn history(n: usize) -> Vec<Vec<u8>> {
+    (0..n).map(|i| format!("line{i}").into_bytes()).collect()
+}
+
+fn deliver(app: &mut App, start: u32, rows: Vec<Vec<u8>>) -> Vec<Effect> {
+    app.on_daemon(
+        DaemonMsg::Scrollback {
+            session: sid("x//a"),
+            start,
+            rows,
+        },
+        Instant::now(),
+    )
+}
+
+fn get_scrollback(start: u32) -> Effect {
+    Effect::Send(ClientMsg::GetScrollback {
+        session: sid("x//a"),
+        start,
+        count: PAGE,
+    })
+}
+
+#[test]
+fn ctrl_u_fetches_history_then_scrolls_by_half_and_full_pages() {
+    let mut app = tree_app();
+    assert_eq!(app.size().0, 37);
+    assert_eq!(app.on_event(ctrl('u'), HOST), vec![get_scrollback(0)]);
+    assert_eq!(app.scroll_offset(), 0);
+    assert!(deliver(&mut app, 0, history(100)).is_empty());
+    assert_eq!(app.scroll_offset(), 18);
+    app.on_event(key(KeyCode::PageUp), HOST);
+    assert_eq!(app.scroll_offset(), 55);
+    app.on_event(ctrl('d'), HOST);
+    assert_eq!(app.scroll_offset(), 37);
+    app.on_event(key(KeyCode::PageDown), HOST);
+    assert_eq!(app.scroll_offset(), 0);
+    // Further down is a no-op, not a request.
+    assert!(app.on_event(key(KeyCode::PageDown), HOST).is_empty());
+}
+
+#[test]
+fn scrolling_is_clamped_to_history_and_g_returns_to_live() {
+    let mut app = tree_app();
+    app.on_event(ctrl('u'), HOST);
+    deliver(&mut app, 0, history(20));
+    assert_eq!(app.scroll_offset(), 18);
+    app.on_event(key(KeyCode::PageUp), HOST);
+    assert_eq!(app.scroll_offset(), 20);
+    app.on_event(ch('G'), HOST);
+    assert_eq!(app.scroll_offset(), 0);
+    // The next scroll reuses nothing stale: it asks again.
+    assert_eq!(app.on_event(ctrl('u'), HOST), vec![get_scrollback(0)]);
+}
+
+#[test]
+fn full_history_pages_are_followed_until_a_short_page() {
+    let mut app = tree_app();
+    app.on_event(ctrl('u'), HOST);
+    let page = vec![b"l".to_vec(); PAGE as usize];
+    assert_eq!(deliver(&mut app, 0, page), vec![get_scrollback(PAGE)]);
+    assert_eq!(app.scroll_offset(), 0);
+    assert!(deliver(&mut app, PAGE, history(5)).is_empty());
+    assert_eq!(app.scroll_offset(), 18);
+}
+
+#[test]
+fn empty_history_and_stale_replies_do_not_scroll() {
+    let mut app = tree_app();
+    // Reply nobody asked for.
+    assert!(deliver(&mut app, 0, history(10)).is_empty());
+    assert_eq!(app.scroll_offset(), 0);
+    app.on_event(ctrl('u'), HOST);
+    deliver(&mut app, 0, Vec::new());
+    assert_eq!(app.scroll_offset(), 0);
+}
+
+#[test]
+fn the_alt_screen_refuses_to_scroll_and_shows_a_hint() {
+    let mut app = tree_app();
+    app.on_daemon(
+        DaemonMsg::Output {
+            session: sid("x//a"),
+            bytes: b"\x1b[?1049h".to_vec(),
+        },
+        Instant::now(),
+    );
+    assert!(app.on_event(ctrl('u'), HOST).is_empty());
+    assert_eq!(
+        app.hint,
+        Some("app manages its own scrolling (mouse wheel)")
+    );
+    app.on_event(ch('x'), HOST);
+    assert_eq!(app.hint, None);
+}
+
+#[test]
+fn typing_in_focus_mode_and_resizing_leave_scrollback() {
+    let mut app = tree_app();
+    app.on_event(ctrl('u'), HOST);
+    deliver(&mut app, 0, history(100));
+    app.on_event(key(KeyCode::Enter), HOST);
+    app.on_event(ch('x'), HOST);
+    assert_eq!(app.scroll_offset(), 0);
+
+    app.on_event(ctrl('\\'), HOST);
+    app.on_event(ctrl('u'), HOST);
+    deliver(&mut app, 0, history(100));
+    assert_eq!(app.scroll_offset(), 18);
+    app.on_event(Event::Resize(100, 30), Rect::new(0, 0, 100, 30));
+    assert_eq!(app.scroll_offset(), 0);
+}
+
+#[test]
+fn scroll_keys_are_data_in_focus_mode() {
+    let mut app = tree_app();
+    app.on_event(key(KeyCode::Enter), HOST);
+    let fx = app.on_event(ctrl('u'), HOST);
+    assert_eq!(sent(&fx), vec![(sid("x//a"), vec![0x15])]);
 }

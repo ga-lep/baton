@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 
 use super::app::{App, Effect};
 use super::terminal_guard::TerminalGuard;
-use super::ui;
+use super::{sidebar, ui};
 use crate::client::{self, ClientError, Conn};
 
 type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
@@ -65,6 +65,10 @@ fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
     match l {
         Link::Up(c) => {
             app.on_connected();
+            match sidebar::load_project_names() {
+                Ok(names) => app.set_projects(names),
+                Err(e) => app.notice = Some(format!("config: {e}")),
+            }
             *conn = Some(c);
         }
         Link::Mismatch(v) => {

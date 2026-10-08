@@ -1,12 +1,13 @@
 //! Drawing: sidebar, info panel, main panel, bottom bar and modals.
 
-use baton_proto::{SessionInfo, Status};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout as Split, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
 use super::app::{App, Overlay};
+use super::labels::{badge, status_label};
+use super::sidebar::repo_name;
 use crate::spike::Mode;
 use crate::term::screen::Screen;
 
@@ -20,34 +21,20 @@ pub const DISCONNECTED_TEXT: &str = "daemon disconnected — press r to reconnec
 /// Height of the info panel under the session list.
 const INFO_HEIGHT: u16 = 8;
 
-/// Status badge from spec section 4.
-fn badge(status: Status) -> &'static str {
-    match status {
-        Status::Starting => "…",
-        Status::Running => "●",
-        Status::Permission => "◐",
-        Status::YourTurn => "✓",
-        Status::Idle => "○",
-        Status::Exited(_) => "✗",
-        Status::Unknown => "?",
+/// Compact duration such as `5s`, `3m 07s` or `2h 05m`.
+pub fn uptime(started_at: u64, now: u64) -> String {
+    let secs = now.saturating_sub(started_at);
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}m {:02}s", secs / 60, secs % 60),
+        _ => format!("{}h {:02}m", secs / 3600, secs % 3600 / 60),
     }
 }
 
-fn status_label(status: Status) -> String {
-    match status {
-        Status::Starting => "starting".into(),
-        Status::Running => "running".into(),
-        Status::Permission => "permission".into(),
-        Status::YourTurn => "your turn".into(),
-        Status::Idle => "idle".into(),
-        Status::Exited(code) => format!("exited {code}"),
-        Status::Unknown => "unknown".into(),
-    }
-}
-
-fn short_name(s: &SessionInfo) -> String {
-    let base = s.repo.rsplit('/').next().unwrap_or(&s.repo);
-    format!("{}/{base}", s.project)
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Text of the version-mismatch modal.
@@ -68,22 +55,11 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .areas(l.sidebar);
 
-    let items: Vec<ListItem> = app
-        .sessions
-        .iter()
-        .map(|s| {
-            ListItem::new(format!(
-                "{} {}  {}",
-                badge(s.status),
-                short_name(s),
-                status_label(s.status)
-            ))
-        })
-        .collect();
-    let mut state = ListState::default().with_selected((!items.is_empty()).then_some(app.selected));
+    let items: Vec<ListItem> = app.rows().iter().map(|r| r.item()).collect();
+    let mut state = ListState::default().with_selected(app.cursor_index());
     f.render_stateful_widget(
         List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Sessions"))
+            .block(Block::default().borders(Borders::ALL).title("Projects"))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
         list_area,
         &mut state,
@@ -102,10 +78,21 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else {
         Style::default()
     };
-    let title = app.selected_session().map_or_else(
+    let mut title = app.selected_session().map_or_else(
         || "Baton".to_owned(),
-        |s| format!("{} · {}", short_name(s), status_label(s.status)),
+        |s| {
+            format!(
+                "{} · {} · {} {}",
+                repo_name(s),
+                s.profile.as_deref().unwrap_or("default"),
+                badge(s.status),
+                status_label(s.status)
+            )
+        },
     );
+    if app.scroll_offset() > 0 {
+        title.push_str(&format!(" [scrollback -{}]", app.scroll_offset()));
+    }
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
@@ -113,15 +100,21 @@ pub fn draw(f: &mut Frame, app: &App) {
             .title(title),
         l.main,
     );
-    match app.selected_mirror() {
-        Some(m) => m.screen().render(l.inner, f.buffer_mut(), focus),
-        None => f.render_widget(
+    match (app.scroll_view(), app.selected_mirror()) {
+        (Some(v), _) => v.render(l.inner, f.buffer_mut()),
+        (None, Some(m)) => m.screen().render(l.inner, f.buffer_mut(), focus),
+        (None, None) => f.render_widget(
             Paragraph::new("No sessions. Start a project with `baton debug open <name>`."),
             l.inner,
         ),
     }
 
-    let bar = if focus { FOCUS_BAR } else { NORMAL_BAR };
+    let bar = match app.hint {
+        Some(hint) if focus => format!(" FOCUS │ {hint}"),
+        Some(hint) => format!(" NORMAL │ {hint}"),
+        None if focus => FOCUS_BAR.to_owned(),
+        None => NORMAL_BAR.to_owned(),
+    };
     f.render_widget(
         Paragraph::new(bar).style(Style::default().add_modifier(Modifier::REVERSED)),
         l.bar,
@@ -138,7 +131,13 @@ fn info_text(app: &App) -> String {
     let Some(s) = app.selected_session() else {
         return "no session".into();
     };
-    let mut text = format!("{}\nstatus  {}", s.repo, status_label(s.status));
+    let mut text = format!(
+        "{}\nprofile  {}\nstatus  {}\nuptime  {}",
+        s.repo,
+        s.profile.as_deref().unwrap_or("default"),
+        status_label(s.status),
+        uptime(s.started_at, unix_now()),
+    );
     if let Some(msg) = &app.notice {
         text.push_str("\n! ");
         text.push_str(msg);
@@ -170,7 +169,7 @@ fn modal(f: &mut Frame, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use baton_proto::DaemonMsg;
+    use baton_proto::{DaemonMsg, SessionInfo, Status};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::time::Instant;
@@ -221,9 +220,71 @@ mod tests {
     #[test]
     fn normal_mode_shows_session_mirror_and_bar() {
         let out = render(&app_with_session());
-        assert!(out.contains("● x/a  running"), "{out}");
+        assert!(out.contains("1 ● a  running"), "{out}");
         assert!(out.contains("│mirrored text"), "{out}");
         assert!(out.contains(NORMAL_BAR.trim()), "{out}");
+    }
+
+    #[test]
+    fn sidebar_shows_open_and_closed_projects_and_dims_closed_ones() {
+        let mut app = app_with_session();
+        app.set_projects(vec!["x".into(), "y".into()]);
+        let out = render(&app);
+        assert!(out.contains("▾ x"), "{out}");
+        assert!(out.contains("▸ y  (closed)"), "{out}");
+        let mut t = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+        t.draw(|f| draw(f, &app)).expect("draw");
+        let buf = t.backend().buffer().clone();
+        let cell_with = |sym: &str| {
+            (0..buf.area.height)
+                .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+                .find(|&(x, y)| buf[(x, y)].symbol() == sym)
+                .map(|p| buf[p].modifier)
+        };
+        assert!(cell_with("▸").is_some_and(|m| m.contains(Modifier::DIM)));
+        assert!(cell_with("▾").is_some_and(|m| !m.contains(Modifier::DIM)));
+    }
+
+    #[test]
+    fn main_title_and_info_panel_describe_the_session() {
+        let mut app = app_with_session();
+        app.sessions[0].profile = Some("p".into());
+        let out = render(&app);
+        assert!(out.contains("a · p · ● running"), "{out}");
+        for field in ["/tmp/a", "profile  p", "status  running", "uptime  "] {
+            assert!(out.contains(field), "{field}: {out}");
+        }
+    }
+
+    #[test]
+    fn scrolled_back_title_shows_the_indicator_and_history() {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let mut app = app_with_session();
+        let host = Rect::new(0, 0, 120, 40);
+        app.on_event(
+            Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+            host,
+        );
+        let history = (0..100).map(|i| format!("old{i}").into_bytes()).collect();
+        app.on_daemon(
+            DaemonMsg::Scrollback {
+                session: baton_proto::SessionId("x//tmp/a".into()),
+                start: 0,
+                rows: history,
+            },
+            Instant::now(),
+        );
+        let out = render(&app);
+        assert!(out.contains("[scrollback -18]"), "{out}");
+        assert!(out.contains("│old82") && out.contains("│old99"), "{out}");
+    }
+
+    #[test]
+    fn uptime_is_compact() {
+        assert_eq!(uptime(100, 105), "5s");
+        assert_eq!(uptime(0, 187), "3m 07s");
+        assert_eq!(uptime(0, 7500), "2h 05m");
+        assert_eq!(uptime(50, 10), "0s");
     }
 
     #[test]

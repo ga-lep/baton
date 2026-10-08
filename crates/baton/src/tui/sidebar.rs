@@ -1,0 +1,177 @@
+//! The project tree: configured projects merged with the daemon's sessions.
+
+use baton_core::config::Config;
+use baton_core::paths;
+use baton_proto::{SessionId, SessionInfo, Status};
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::ListItem;
+
+use super::labels::{badge, status_label};
+
+/// Where the sidebar cursor is, by identity so it survives list changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cursor {
+    /// A project row.
+    Project(String),
+    /// A session row.
+    Session(SessionId),
+}
+
+/// One visible sidebar row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Row<'a> {
+    /// A project header.
+    Project {
+        /// Project name.
+        name: &'a str,
+        /// Whether the daemon has any session for it.
+        open: bool,
+        /// Whether any of those sessions is still running.
+        live: bool,
+    },
+    /// A session under its project; `n` is its 1-based position there.
+    Session {
+        /// 1-based number within the project.
+        n: usize,
+        /// The session.
+        info: &'a SessionInfo,
+    },
+}
+
+impl Row<'_> {
+    /// The cursor value that points at this row.
+    pub fn cursor(&self) -> Cursor {
+        match self {
+            Row::Project { name, .. } => Cursor::Project((*name).to_owned()),
+            Row::Session { info, .. } => Cursor::Session(info.id.clone()),
+        }
+    }
+
+    /// The sidebar text of this row.
+    pub fn text(&self) -> String {
+        match self {
+            Row::Project {
+                name, open: true, ..
+            } => format!("▾ {name}"),
+            Row::Project {
+                name, open: false, ..
+            } => format!("▸ {name}  (closed)"),
+            Row::Session { n, info } => format!(
+                "  {n} {} {}  {}",
+                badge(info.status),
+                repo_name(info),
+                status_label(info.status)
+            ),
+        }
+    }
+
+    /// The list item for this row; projects without live sessions are dim.
+    pub fn item(&self) -> ListItem<'static> {
+        let item = ListItem::new(self.text());
+        match self {
+            Row::Project { live: false, .. } => {
+                item.style(Style::default().add_modifier(Modifier::DIM))
+            }
+            _ => item,
+        }
+    }
+}
+
+/// Last path component of a session's repo.
+pub fn repo_name(s: &SessionInfo) -> &str {
+    s.repo.rsplit('/').next().unwrap_or(&s.repo)
+}
+
+/// The rows to show: configured projects in config order, then projects the
+/// daemon knows that the config does not (so no session is ever hidden).
+pub fn rows<'a>(projects: &'a [String], sessions: &'a [SessionInfo]) -> Vec<Row<'a>> {
+    let mut names: Vec<&str> = projects.iter().map(String::as_str).collect();
+    for s in sessions {
+        if !names.contains(&s.project.as_str()) {
+            names.push(&s.project);
+        }
+    }
+    let mut out = Vec::new();
+    for name in names {
+        let mine: Vec<&SessionInfo> = sessions.iter().filter(|s| s.project == name).collect();
+        out.push(Row::Project {
+            name,
+            open: !mine.is_empty(),
+            live: mine.iter().any(|s| !matches!(s.status, Status::Exited(_))),
+        });
+        for (i, info) in mine.into_iter().enumerate() {
+            out.push(Row::Session { n: i + 1, info });
+        }
+    }
+    out
+}
+
+/// Project names from the config file, in order.
+///
+/// # Errors
+/// A message describing why the config could not be read.
+pub fn load_project_names() -> Result<Vec<String>, String> {
+    let path = paths::config_file().map_err(|e| e.to_string())?;
+    let config = Config::load(&path, &|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+        .map_err(|e| e.to_string())?;
+    Ok(config.projects.into_iter().map(|p| p.name).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(project: &str, repo: &str, status: Status) -> SessionInfo {
+        SessionInfo {
+            id: SessionId(format!("{project}/{repo}")),
+            project: project.into(),
+            repo: repo.into(),
+            profile: None,
+            status,
+            claude_session_id: None,
+            model: None,
+            started_at: 0,
+            exit_code: None,
+            usage: None,
+        }
+    }
+
+    #[test]
+    fn rows_merge_config_order_with_sessions_and_unknown_projects() {
+        let projects = vec!["b".to_owned(), "a".to_owned()];
+        let sessions = vec![
+            info("a", "/r/one", Status::Running),
+            info("z", "/r/zed", Status::Idle),
+            info("a", "/r/two", Status::Exited(1)),
+        ];
+        let text: Vec<String> = rows(&projects, &sessions).iter().map(Row::text).collect();
+        assert_eq!(
+            text,
+            vec![
+                "▸ b  (closed)",
+                "▾ a",
+                "  1 ● one  running",
+                "  2 ✗ two  exited 1",
+                "▾ z",
+                "  1 ○ zed  idle",
+            ]
+        );
+    }
+
+    #[test]
+    fn only_projects_without_live_sessions_are_dim() {
+        let projects = vec!["b".to_owned(), "a".to_owned(), "c".to_owned()];
+        let sessions = vec![
+            info("a", "/r/one", Status::Running),
+            info("c", "/r/x", Status::Exited(0)),
+        ];
+        let live: Vec<bool> = rows(&projects, &sessions)
+            .iter()
+            .filter_map(|r| match r {
+                Row::Project { live, .. } => Some(*live),
+                Row::Session { .. } => None,
+            })
+            .collect();
+        assert_eq!(live, vec![false, true, false]);
+    }
+}

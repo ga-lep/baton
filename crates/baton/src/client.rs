@@ -153,11 +153,38 @@ pub fn spawn_detached_foreground() -> io::Result<()> {
 /// How long a SIGTERMed daemon gets to exit before `restart_daemon` gives up.
 const RESTART_STOP_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Whether two `/proc/<pid>/exe` style paths name the same binary, ignoring
+/// the kernel's ` (deleted)` suffix (a rebuilt binary replaces the file).
+fn exe_matches(a: &Path, b: &Path) -> bool {
+    fn clean(p: &Path) -> &str {
+        let s = p.to_str().unwrap_or_default();
+        s.strip_suffix(" (deleted)").unwrap_or(s)
+    }
+    let (a, b) = (clean(a), clean(b));
+    !a.is_empty() && a == b
+}
+
+/// Whether `pid` is a live process running the same executable as this one.
+/// Guards `restart_daemon` against signalling an arbitrary process.
+fn is_our_daemon(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    let (Ok(theirs), Ok(ours)) = (
+        std::fs::read_link(format!("/proc/{pid}/exe")),
+        std::env::current_exe(),
+    ) else {
+        return false;
+    };
+    exe_matches(&theirs, &ours)
+}
+
 /// Stops the running daemon (found through the socket's peer credentials, so
 /// it works across protocol versions) and starts a fresh one.
 ///
 /// # Errors
-/// If the socket is served by another user, the old daemon does not exit, or
+/// If the socket is served by another user or by a process that is not this
+/// binary, the old daemon does not exit, or
 /// the new one cannot be started.
 pub async fn restart_daemon(role: Role) -> Result<Conn, ClientError> {
     use nix::sys::signal::{Signal, kill};
@@ -174,18 +201,25 @@ pub async fn restart_daemon(role: Role) -> Result<Conn, ClientError> {
             });
         }
         drop(stream);
-        if let Some(pid) = cred.pid().map(Pid::from_raw) {
-            // SIGTERM makes the daemon terminate its sessions and exit.
-            let _ = kill(pid, Signal::SIGTERM);
-            let deadline = Instant::now() + RESTART_STOP_TIMEOUT;
-            while kill(pid, None).is_ok() {
-                if Instant::now() >= deadline {
-                    return Err(ClientError::Io(io::Error::other(
-                        "old daemon did not stop in time",
-                    )));
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
+        let raw = cred
+            .pid()
+            .ok_or_else(|| io::Error::other("cannot identify the daemon process"))?;
+        if !is_our_daemon(raw) {
+            return Err(ClientError::Io(io::Error::other(format!(
+                "pid {raw} serving the socket is not a baton binary; not signalling it"
+            ))));
+        }
+        let pid = Pid::from_raw(raw);
+        // SIGTERM makes the daemon terminate its sessions and exit.
+        let _ = kill(pid, Signal::SIGTERM);
+        let deadline = Instant::now() + RESTART_STOP_TIMEOUT;
+        while kill(pid, None).is_ok() {
+            if Instant::now() >= deadline {
+                return Err(ClientError::Io(io::Error::other(
+                    "old daemon did not stop in time",
+                )));
             }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
     ensure_daemon(role).await
@@ -239,6 +273,26 @@ mod tests {
                 drop(s);
             }
         })
+    }
+
+    #[test]
+    fn exe_match_ignores_deleted_suffix_and_rejects_other_binaries() {
+        let p = Path::new;
+        assert!(exe_matches(p("/a/baton"), p("/a/baton")));
+        assert!(exe_matches(p("/a/baton (deleted)"), p("/a/baton")));
+        assert!(exe_matches(p("/a/baton"), p("/a/baton (deleted)")));
+        assert!(!exe_matches(p("/usr/bin/sleep"), p("/a/baton")));
+    }
+
+    #[test]
+    fn daemon_pid_must_be_positive_and_run_our_binary() {
+        assert!(!is_our_daemon(0));
+        assert!(!is_our_daemon(-1));
+        assert!(!is_our_daemon(i32::MAX));
+        let me = i32::try_from(std::process::id()).expect("pid fits");
+        assert!(is_our_daemon(me));
+        // init is not us.
+        assert!(!is_our_daemon(1));
     }
 
     #[tokio::test]

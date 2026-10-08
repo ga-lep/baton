@@ -12,6 +12,8 @@ use ratatui::layout::Rect;
 
 use super::mirror::Mirror;
 use super::render_pacer::RenderPacer;
+use super::scrollback::{Loading, PAGE, Scroll, View};
+use super::sidebar::{self, Cursor, Row};
 use crate::spike::{KeyAction, Layout, Mode, classify_key, contains, layout};
 use crate::term::encode::{encode_focus, encode_key, encode_mouse, encode_paste};
 use crate::term::screen::Screen;
@@ -40,13 +42,35 @@ pub enum Effect {
     RestartDaemon,
 }
 
+/// Hint shown when scrolling is refused on the alternate screen.
+pub const ALT_SCREEN_HINT: &str = "app manages its own scrolling (mouse wheel)";
+
+/// A scroll request from the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scrolling {
+    HalfUp,
+    HalfDown,
+    PageUp,
+    PageDown,
+    Live,
+}
+
 /// All TUI state.
 pub struct App {
     /// Sessions as last listed by the daemon.
     pub sessions: Vec<SessionInfo>,
     mirrors: HashMap<SessionId, Mirror>,
-    /// Index into `sessions`.
-    pub selected: usize,
+    /// Configured project names, in config order.
+    projects: Vec<String>,
+    /// Sidebar cursor; `None` until there is a row to put it on.
+    cursor: Option<Cursor>,
+    /// Whether the user moved the cursor (until then it follows the data).
+    moved: bool,
+    /// The session shown in the main panel.
+    current: Option<SessionId>,
+    scroll: HashMap<SessionId, Scroll>,
+    /// One-line hint for the bottom bar, cleared by the next key.
+    pub hint: Option<&'static str>,
     /// Input mode.
     pub mode: Mode,
     /// Active modal.
@@ -86,7 +110,12 @@ impl App {
         Self {
             sessions: Vec::new(),
             mirrors: HashMap::new(),
-            selected: 0,
+            projects: Vec::new(),
+            cursor: None,
+            moved: false,
+            current: None,
+            scroll: HashMap::new(),
+            hint: None,
             mode: Mode::Normal,
             overlay: Overlay::None,
             size: inner_size(&layout),
@@ -101,9 +130,47 @@ impl App {
         self.size
     }
 
-    /// The selected session, if any.
+    /// The session shown in the main panel, if any.
     pub fn selected_session(&self) -> Option<&SessionInfo> {
-        self.sessions.get(self.selected)
+        let id = self.current.as_ref()?;
+        self.sessions.iter().find(|s| &s.id == id)
+    }
+
+    /// Configured projects merged with the sessions, as sidebar rows.
+    pub fn rows(&self) -> Vec<Row<'_>> {
+        sidebar::rows(&self.projects, &self.sessions)
+    }
+
+    /// The sidebar cursor.
+    #[cfg(test)]
+    pub fn cursor(&self) -> Option<&Cursor> {
+        self.cursor.as_ref()
+    }
+
+    /// Index of the cursor among `rows()`.
+    pub fn cursor_index(&self) -> Option<usize> {
+        let cursor = self.cursor.as_ref()?;
+        self.rows().iter().position(|r| &r.cursor() == cursor)
+    }
+
+    /// Lines the selected session is scrolled back (0 is live).
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_view().map_or(0, View::offset)
+    }
+
+    /// The scrolled view of the selected session, if it is scrolled back.
+    pub fn scroll_view(&self) -> Option<&View> {
+        match self.scroll.get(&self.selected_session()?.id)? {
+            Scroll::View(v) => Some(v),
+            Scroll::Loading(_) => None,
+        }
+    }
+
+    /// Sets the configured project names (read from the config on attach).
+    pub fn set_projects(&mut self, projects: Vec<String>) {
+        self.projects = projects;
+        self.settle();
+        self.pacer.mark_dirty();
     }
 
     /// The mirror of the selected session, if one exists.
@@ -115,7 +182,11 @@ impl App {
     pub fn on_connected(&mut self) {
         self.sessions.clear();
         self.mirrors.clear();
-        self.selected = 0;
+        self.scroll.clear();
+        self.cursor = None;
+        self.moved = false;
+        self.current = None;
+        self.hint = None;
         self.mode = Mode::Normal;
         self.overlay = Overlay::None;
         self.notice = None;
@@ -149,6 +220,7 @@ impl App {
             } => {
                 self.mirrors
                     .insert(session.clone(), Mirror::from_snapshot(rows, cols, &bytes));
+                self.scroll.remove(&session);
                 self.touched(&session, now);
             }
             DaemonMsg::Output { session, bytes } => {
@@ -166,6 +238,11 @@ impl App {
                 }
                 self.pacer.mark_dirty();
             }
+            DaemonMsg::Scrollback {
+                session,
+                start,
+                rows,
+            } => return self.on_history(&session, start, rows),
             DaemonMsg::Error { message } => {
                 self.notice = Some(message);
                 self.pacer.mark_dirty();
@@ -176,15 +253,234 @@ impl App {
     }
 
     fn set_sessions(&mut self, list: Vec<SessionInfo>) {
-        let keep = self.selected_session().map(|s| s.id.clone());
         self.mirrors
             .retain(|id, _| list.iter().any(|s| &s.id == id));
+        self.scroll.retain(|id, _| list.iter().any(|s| &s.id == id));
         self.sessions = list;
-        self.selected = keep
-            .and_then(|id| self.sessions.iter().position(|s| s.id == id))
-            .unwrap_or(0)
-            .min(self.sessions.len().saturating_sub(1));
+        self.settle();
         self.pacer.mark_dirty();
+    }
+
+    /// Repairs the cursor and the shown session after the data changed.
+    fn settle(&mut self) {
+        let rows = self.rows();
+        let resolved = self
+            .cursor
+            .as_ref()
+            .and_then(|c| rows.iter().find(|r| &r.cursor() == c));
+        // Until the user moves, the cursor follows the data: first session.
+        let target = match resolved {
+            Some(_) if self.moved => resolved,
+            _ => rows
+                .iter()
+                .find(|r| matches!(r, Row::Session { .. }))
+                .or(rows.first()),
+        };
+        let cursor = target.map(Row::cursor);
+        let from_cursor = match target {
+            Some(Row::Session { info, .. }) => Some(info.id.clone()),
+            _ => None,
+        };
+        let keep = self
+            .current
+            .clone()
+            .filter(|id| self.sessions.iter().any(|s| &s.id == id));
+        let first = self.sessions.first().map(|s| s.id.clone());
+        self.cursor = cursor;
+        self.current = from_cursor.or(keep).or(first);
+    }
+
+    /// Moves the cursor to `row`; a session row also becomes the shown session.
+    fn go_to(&mut self, cursor: Cursor) {
+        if let Cursor::Session(id) = &cursor {
+            self.current = Some(id.clone());
+        }
+        self.cursor = Some(cursor);
+        self.moved = true;
+    }
+
+    /// The project the cursor is in.
+    fn cursor_project(&self) -> Option<String> {
+        match self.cursor.as_ref()? {
+            Cursor::Project(name) => Some(name.clone()),
+            Cursor::Session(id) => self
+                .sessions
+                .iter()
+                .find(|s| &s.id == id)
+                .map(|s| s.project.clone()),
+        }
+    }
+
+    fn open_project(&self, name: String) -> Vec<Effect> {
+        vec![Effect::Send(ClientMsg::OpenProject { name })]
+    }
+
+    /// Sidebar keys; `None` when `key` is not one of them.
+    fn on_sidebar_key(&mut self, key: &KeyEvent) -> Option<Vec<Effect>> {
+        let plain = key.modifiers == KeyModifiers::NONE;
+        let ctrl = key.modifiers == KeyModifiers::CONTROL;
+        Some(match key.code {
+            KeyCode::Char('j') | KeyCode::Down if plain => self.step(1),
+            KeyCode::Char('k') | KeyCode::Up if plain => self.step(-1),
+            KeyCode::Enter | KeyCode::Char('l') if plain => self.activate(),
+            KeyCode::Char('o') if plain => self
+                .cursor_project()
+                .map_or_else(Vec::new, |n| self.open_project(n)),
+            KeyCode::Char(d @ '1'..='9') if plain => {
+                self.pick(usize::from(d as u8 - b'0'));
+                Vec::new()
+            }
+            KeyCode::Char('u') if ctrl => self.scroll_by(Scrolling::HalfUp),
+            KeyCode::Char('d') if ctrl => self.scroll_by(Scrolling::HalfDown),
+            KeyCode::PageUp => self.scroll_by(Scrolling::PageUp),
+            KeyCode::PageDown => self.scroll_by(Scrolling::PageDown),
+            KeyCode::Char('G') if key.modifiers == KeyModifiers::SHIFT || plain => {
+                self.scroll_by(Scrolling::Live)
+            }
+            _ => return None,
+        })
+    }
+
+    /// `Enter` / `l`: focus a session, open a closed project, or step into an
+    /// open one.
+    fn activate(&mut self) -> Vec<Effect> {
+        let rows = self.rows();
+        let first_of = |name: &str| {
+            rows.iter().find_map(|r| match r {
+                Row::Session { info, .. } if info.project == name => Some(info.id.clone()),
+                _ => None,
+            })
+        };
+        match self.cursor.clone() {
+            Some(Cursor::Session(_)) => {
+                self.mode = Mode::Focus;
+                Vec::new()
+            }
+            Some(Cursor::Project(name)) => match first_of(&name) {
+                Some(id) => {
+                    self.go_to(Cursor::Session(id));
+                    Vec::new()
+                }
+                None => self.open_project(name),
+            },
+            None => Vec::new(),
+        }
+    }
+
+    /// `1`..`9`: session `n` of the cursor's project.
+    fn pick(&mut self, n: usize) {
+        let Some(project) = self.cursor_project() else {
+            return;
+        };
+        let id = self
+            .sessions
+            .iter()
+            .filter(|s| s.project == project)
+            .nth(n - 1)
+            .map(|s| s.id.clone());
+        if let Some(id) = id {
+            self.go_to(Cursor::Session(id));
+        }
+    }
+
+    fn step(&mut self, delta: isize) -> Vec<Effect> {
+        let rows = self.rows();
+        let last = rows.len().saturating_sub(1);
+        let from = self.cursor_index().unwrap_or(0);
+        let to = from.saturating_add_signed(delta).min(last);
+        let next = rows.get(to).map(Row::cursor);
+        if let Some(c) = next {
+            self.go_to(c);
+        }
+        Vec::new()
+    }
+
+    /// Scroll keys for the shown session.
+    fn scroll_by(&mut self, how: Scrolling) -> Vec<Effect> {
+        let Some(id) = self.selected_session().map(|s| s.id.clone()) else {
+            return Vec::new();
+        };
+        let rows = usize::from(self.size.0);
+        let half = (rows / 2).max(1);
+        let up = matches!(how, Scrolling::HalfUp | Scrolling::PageUp);
+        let amount = match how {
+            Scrolling::HalfUp | Scrolling::HalfDown => half,
+            _ => rows,
+        };
+        if how == Scrolling::Live {
+            self.scroll.remove(&id);
+            return Vec::new();
+        }
+        match self.scroll.get_mut(&id) {
+            Some(Scroll::View(view)) => {
+                let delta = isize::try_from(amount).unwrap_or(isize::MAX);
+                if view.scroll(if up { delta } else { -delta }) == 0 {
+                    self.scroll.remove(&id);
+                }
+                Vec::new()
+            }
+            Some(Scroll::Loading(l)) => {
+                if up {
+                    l.want += amount;
+                }
+                Vec::new()
+            }
+            None if up => {
+                if self
+                    .mirrors
+                    .get(&id)
+                    .is_some_and(|m| m.screen().alt_screen())
+                {
+                    self.hint = Some(ALT_SCREEN_HINT);
+                    return Vec::new();
+                }
+                self.scroll.insert(
+                    id.clone(),
+                    Scroll::Loading(Loading {
+                        rows: Vec::new(),
+                        want: amount,
+                    }),
+                );
+                vec![Self::history_page(id, 0)]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn history_page(session: SessionId, start: u32) -> Effect {
+        Effect::Send(ClientMsg::GetScrollback {
+            session,
+            start,
+            count: PAGE,
+        })
+    }
+
+    /// A page of history arrived.
+    fn on_history(&mut self, session: &SessionId, start: u32, rows: Vec<Vec<u8>>) -> Vec<Effect> {
+        let Some(Scroll::Loading(loading)) = self.scroll.get_mut(session) else {
+            return Vec::new();
+        };
+        if loading.rows.len() != start as usize {
+            return Vec::new();
+        }
+        let full = rows.len() >= PAGE as usize;
+        loading.rows.extend(rows);
+        if full {
+            let next = u32::try_from(loading.rows.len()).unwrap_or(u32::MAX);
+            return vec![Self::history_page(session.clone(), next)];
+        }
+        let Some(Scroll::Loading(done)) = self.scroll.remove(session) else {
+            return Vec::new();
+        };
+        if let Some(mirror) = self.mirrors.get_mut(session)
+            && !done.rows.is_empty()
+        {
+            let view = View::build(&done.rows, mirror, done.want);
+            self.scroll
+                .insert(session.clone(), Scroll::View(Box::new(view)));
+        }
+        self.pacer.mark_dirty();
+        Vec::new()
     }
 
     /// A mirror changed: redraw if it is the visible one.
@@ -241,6 +537,7 @@ impl App {
             return Vec::new();
         }
         self.pacer.mark_dirty();
+        self.hint = None;
         match self.overlay {
             Overlay::VersionMismatch { .. } => {
                 return vec![match key.code {
@@ -257,37 +554,28 @@ impl App {
             }
             Overlay::None => {}
         }
-        if self.mode == Mode::Normal && key.modifiers == KeyModifiers::NONE {
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => return self.select(1),
-                KeyCode::Char('k') | KeyCode::Up => return self.select(-1),
-                _ => {}
-            }
+        if self.mode == Mode::Normal
+            && let Some(effects) = self.on_sidebar_key(key)
+        {
+            return effects;
         }
         match classify_key(self.mode, key) {
             KeyAction::ToNormal => {
                 self.mode = Mode::Normal;
                 Vec::new()
             }
-            KeyAction::ToFocus => {
-                if self.selected_session().is_some() {
-                    self.mode = Mode::Focus;
-                }
-                Vec::new()
-            }
+            KeyAction::ToFocus => Vec::new(),
             KeyAction::Quit => vec![Effect::Quit],
             KeyAction::Forward => {
+                // Typing returns to the live view, as in a terminal.
+                if let Some(id) = self.selected_session().map(|s| s.id.clone()) {
+                    self.scroll.remove(&id);
+                }
                 let modes = self.selected_modes();
                 self.to_session(|_| encode_key(key, &modes).unwrap_or_default())
             }
             KeyAction::Ignore => Vec::new(),
         }
-    }
-
-    fn select(&mut self, delta: isize) -> Vec<Effect> {
-        let last = self.sessions.len().saturating_sub(1);
-        self.selected = self.selected.saturating_add_signed(delta).min(last);
-        Vec::new()
     }
 
     /// Re-lays out for `host`; tells the daemon if the panel size changed.
@@ -299,6 +587,8 @@ impl App {
             return Vec::new();
         }
         self.size = size;
+        // Cached history was laid out for the old size.
+        self.scroll.clear();
         for m in self.mirrors.values_mut() {
             m.resize(size.0, size.1);
         }

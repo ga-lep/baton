@@ -36,6 +36,11 @@ impl Mirror {
         &self.screen
     }
 
+    /// Bytes that reproduce the current screen on a fresh emulator.
+    pub fn snapshot(&mut self) -> Vec<u8> {
+        self.screen.snapshot()
+    }
+
     /// Whether the application holds a synchronized-output frame open.
     pub fn sync_output(&self) -> bool {
         self.screen.encode_modes().term.sync_output

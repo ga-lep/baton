@@ -95,6 +95,9 @@ struct Inner {
 pub struct Registry {
     groups: Arc<ChildGroups>,
     inner: Mutex<Inner>,
+    /// Held for the whole of `open_project`, never together with `inner`
+    /// while spawning.
+    open_gate: Mutex<()>,
 }
 
 /// Why `OpenProject` failed.
@@ -119,6 +122,7 @@ impl Registry {
                 nudge: true,
                 attached: None,
             }),
+            open_gate: Mutex::new(()),
         }
     }
 
@@ -151,12 +155,17 @@ impl Registry {
             .find(|p| p.name == name)
             .ok_or_else(|| OpenError::UnknownProject(name.to_owned()))?;
         let sock = paths::socket_path();
-        let mut guard = self.lock();
-        let inner = &mut *guard;
-        inner.nudge = config.attach_redraw_nudge;
+        // Serializes opens so two requests cannot both spawn the same
+        // session; the registry lock itself is not held while spawning.
+        let _open = self.open_gate.lock().unwrap_or_else(|e| e.into_inner());
+        let size = {
+            let mut inner = self.lock();
+            inner.nudge = config.attach_redraw_nudge;
+            inner.size
+        };
         let mut failures = Vec::new();
-        let mut result = Vec::new();
-        let mut fresh = Vec::new();
+        let mut started = Vec::new();
+        let mut ids = Vec::new();
         for spec in &project.sessions {
             let id = match SessionId::from_repo(&spec.project, &spec.repo) {
                 Ok(id) => id,
@@ -165,30 +174,45 @@ impl Registry {
                     continue;
                 }
             };
-            let existing = inner.sessions.iter().position(|s| s.id == id);
-            if let Some(i) = existing
-                && !matches!(inner.sessions[i].info().status, Status::Exited(_))
-            {
-                result.push(inner.sessions[i].info());
+            ids.push(id.clone());
+            let live = self
+                .lock()
+                .sessions
+                .iter()
+                .find(|s| s.id == id)
+                .map(SessionHandle::info)
+                .filter(|i| !matches!(i.status, Status::Exited(_)));
+            if live.is_some() {
                 continue;
             }
             let launch = session::Launch {
                 id: id.clone(),
                 spec,
                 sock: &sock,
-                size: inner.size,
+                size,
                 scrollback: config.scrollback_lines,
             };
+            // No registry lock here: spawning a PTY can be slow.
             match session::start(&launch, &self.groups) {
-                Ok(handle) => {
-                    result.push(handle.info());
-                    match existing {
-                        Some(i) => inner.sessions[i] = handle,
-                        None => inner.sessions.push(handle),
-                    }
-                    fresh.push(id);
-                }
+                Ok(handle) => started.push(handle),
                 Err(e) => failures.push(format!("{}: {e:#}", spec.repo.display())),
+            }
+        }
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        let mut fresh = Vec::new();
+        for handle in started {
+            if inner.size != size {
+                // The client resized while this session was being spawned.
+                handle.send(Cmd::Resize {
+                    rows: inner.size.0,
+                    cols: inner.size.1,
+                });
+            }
+            fresh.push(handle.id.clone());
+            match inner.sessions.iter().position(|s| s.id == handle.id) {
+                Some(i) => inner.sessions[i] = handle,
+                None => inner.sessions.push(handle),
             }
         }
         // Tell an attached client about the new sessions.
@@ -204,6 +228,11 @@ impl Registry {
                 });
             }
         }
+        let result: Vec<SessionInfo> = ids
+            .iter()
+            .filter_map(|id| inner.sessions.iter().find(|s| &s.id == id))
+            .map(SessionHandle::info)
+            .collect();
         if failures.is_empty() {
             Ok(result)
         } else {

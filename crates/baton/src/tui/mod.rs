@@ -2,8 +2,11 @@
 
 pub mod app;
 pub mod event_loop;
+pub mod labels;
 pub mod mirror;
 pub mod render_pacer;
+pub mod scrollback;
+pub mod sidebar;
 pub mod terminal_guard;
 pub mod ui;
 

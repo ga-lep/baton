@@ -185,10 +185,13 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
                 break;
             }
             ClientMsg::Detach | ClientMsg::Hello { .. } => break, // Hello again: protocol violation
-            ClientMsg::OpenProject { name } => Some(match state.registry.open_project(&name) {
-                Ok(list) => DaemonMsg::SessionList(list),
-                Err(e) => error(e),
-            }),
+            ClientMsg::OpenProject { name } => match state.registry.open_project(&name) {
+                // An attached client is pushed the full list; replying with
+                // only this project's sessions would overwrite it.
+                Ok(_) if attached => None,
+                Ok(list) => Some(DaemonMsg::SessionList(list)),
+                Err(e) => Some(error(e)),
+            },
             ClientMsg::Attach { rows, cols } => match validate_size(rows, cols) {
                 Ok((rows, cols)) => {
                     let (tx, rx) = mpsc::channel(CLIENT_QUEUE);
