@@ -12,3 +12,6 @@ workspace = true
 clap.workspace = true
 baton-core.workspace = true
 crossterm = "0.29"
+ratatui = "0.30"
+tui-term = "0.3"
+vt100 = "0.16"
