@@ -2,6 +2,7 @@
 
 pub mod lifecycle;
 pub mod notifier;
+pub mod persist;
 pub mod registry;
 pub mod server;
 pub mod session;
@@ -9,7 +10,6 @@ pub mod spawn;
 
 use anyhow::{Context, Result};
 use baton_core::paths;
-use std::os::unix::fs::DirBuilderExt;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -35,12 +35,9 @@ pub fn run_foreground() -> Result<Outcome> {
     let Some(lock) = lifecycle::acquire_lock(&run_dir).context("daemon lock")? else {
         return Ok(Outcome::AlreadyRunning);
     };
-    let state_dir = paths::state_dir().context("state dir")?;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&state_dir)
-        .context("creating state dir")?;
+    // Private, user-owned and not a symlink, like the runtime dir: it holds
+    // state.json, whose contents later reach `claude`'s command line.
+    let state_dir = paths::ensure_state_dir().context("state dir")?;
     let _log_guard = crate::logging::init(&state_dir)?;
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -66,6 +63,7 @@ async fn serve_until_shutdown(run_dir: &std::path::Path) -> Result<()> {
     let shutdown = CancellationToken::new();
     let mut term = signal(SignalKind::terminate()).context("SIGTERM handler")?;
     let mut int = signal(SignalKind::interrupt()).context("SIGINT handler")?;
+    let writer = tokio::spawn(Arc::clone(&state.store).run_writer());
     let serving = server::serve(listener, shutdown.clone(), Arc::clone(&state));
     tokio::pin!(serving);
     tokio::select! {
@@ -74,6 +72,10 @@ async fn serve_until_shutdown(run_dir: &std::path::Path) -> Result<()> {
         _ = int.recv() => tracing::info!("SIGINT received"),
     }
     shutdown.cancel();
+    // Before the children are killed, so the exits this causes are not
+    // recorded as the sessions' last status.
+    writer.abort();
+    state.store.flush();
     let groups = state.groups.take();
     lifecycle::terminate_groups(&groups, KILL_GRACE).await;
     lifecycle::remove_socket(&sock);

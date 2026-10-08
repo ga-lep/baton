@@ -2,6 +2,7 @@
 //! process groups that must be terminated at shutdown.
 
 use super::notifier::Notifier;
+use super::persist::Store;
 use super::session::{self, ClientSink, Cmd, SessionHandle};
 use baton_core::config::Config;
 use baton_core::hooks::{self, HookPayload};
@@ -9,6 +10,7 @@ use baton_core::notify_rule::ClientView;
 use baton_core::paths;
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -61,6 +63,7 @@ pub struct BadGroup(pub i32);
 #[derive(Default)]
 pub struct ChildGroups {
     groups: Mutex<Vec<Pid>>,
+    closed: AtomicBool,
 }
 
 impl ChildGroups {
@@ -73,8 +76,19 @@ impl ChildGroups {
         if pgid.as_raw() <= 1 || pgid == nix::unistd::getpgrp() {
             return Err(BadGroup(pgid.as_raw()));
         }
-        self.lock().push(pgid);
+        let mut groups = self.lock();
+        // After shutdown took the groups nothing new may start: a session
+        // relaunching on the way down would leave an unkilled child.
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(BadGroup(pgid.as_raw()));
+        }
+        groups.push(pgid);
         Ok(())
+    }
+
+    /// Whether `pgid` is still registered, that is, its leader was not reaped.
+    pub fn contains(&self, pgid: Pid) -> bool {
+        self.lock().contains(&pgid)
     }
 
     /// Forgets a group, typically because its leader was reaped (the id may
@@ -83,9 +97,12 @@ impl ChildGroups {
         self.lock().retain(|&g| g != pgid);
     }
 
-    /// Takes all registered groups.
+    /// Takes all registered groups and refuses further registrations (the
+    /// daemon is shutting down).
     pub fn take(&self) -> Vec<Pid> {
-        std::mem::take(&mut *self.lock())
+        let mut groups = self.lock();
+        self.closed.store(true, Ordering::SeqCst);
+        std::mem::take(&mut *groups)
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<Pid>> {
@@ -111,6 +128,7 @@ struct Inner {
 pub struct Registry {
     groups: Arc<ChildGroups>,
     notifier: Notifier,
+    store: Arc<Store>,
     inner: Mutex<Inner>,
     /// Held for the whole of `open_project`, never together with `inner`
     /// while spawning.
@@ -130,10 +148,11 @@ pub enum OpenError {
 
 impl Registry {
     /// Creates an empty registry.
-    pub fn new(groups: Arc<ChildGroups>, notifier: Notifier) -> Self {
+    pub fn new(groups: Arc<ChildGroups>, notifier: Notifier, store: Arc<Store>) -> Self {
         Self {
             groups,
             notifier,
+            store,
             inner: Mutex::new(Inner {
                 sessions: Vec::new(),
                 size: DEFAULT_SIZE,
@@ -205,8 +224,16 @@ impl Registry {
             if live.is_some() {
                 continue;
             }
+            // Only a UUID is ever handed to `claude --resume`.
+            let resume_id = self
+                .store
+                .get(&id)
+                .and_then(|p| p.claude_session_id)
+                .filter(|v| baton_core::launch::is_uuid(v));
             let launch = session::Launch {
                 id: id.clone(),
+                resume_id,
+                store: &self.store,
                 spec,
                 sock: &sock,
                 hooks: &hooks,
@@ -265,6 +292,17 @@ impl Registry {
         } else {
             Err(OpenError::Spawn(failures.join("; ")))
         }
+    }
+
+    /// Kills the session's child (if still running) and launches it again,
+    /// resuming its conversation. The relaunch itself is asynchronous.
+    ///
+    /// # Errors
+    /// If the session does not exist.
+    pub fn restart(&self, id: &SessionId) -> Result<(), String> {
+        let inner = self.lock();
+        find(&inner, id)?.send(Cmd::Restart);
+        Ok(())
     }
 
     /// Applies a hook event from a Claude child to its session. Events for
@@ -455,6 +493,21 @@ mod tests {
         }
         assert!(g.register(nix::unistd::getpgrp()).is_err());
         assert!(g.take().is_empty());
+    }
+
+    #[test]
+    fn groups_know_their_members_and_refuse_registrations_after_take() {
+        let g = ChildGroups::default();
+        let (a, b) = (Pid::from_raw(i32::MAX - 1), Pid::from_raw(i32::MAX - 2));
+        g.register(a).unwrap();
+        assert!(g.contains(a) && !g.contains(b));
+        g.unregister(a);
+        assert!(!g.contains(a));
+        g.register(a).unwrap();
+        assert_eq!(g.take(), vec![a]);
+        // Shutting down: a session that relaunches now must not get a child.
+        assert!(g.register(b).is_err());
+        assert!(!g.contains(b));
     }
 
     #[test]

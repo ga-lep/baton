@@ -19,7 +19,9 @@ pub struct Spawned {
 /// Builds the child command from an argument vector (never a shell string).
 ///
 /// The command is the profile argv, `--settings <hooks>` (the injected hook
-/// registration; additive to the user's own settings), then the repo `args`. It runs with
+/// registration; additive to the user's own settings), the launch-ladder
+/// arguments `rung` (for example `--resume <uuid>`), then the repo `args`. Every
+/// piece is a separate argv element; nothing goes through a shell. It runs with
 /// `cwd` set to the repo (portable-pty would otherwise use `$HOME`), and gets
 /// the inherited environment, the profile environment, then `BATON_SESSION`
 /// and `BATON_SOCK`, which the profile cannot override.
@@ -31,6 +33,7 @@ pub fn build_command(
     id: &SessionId,
     sock: &Path,
     hooks: &Path,
+    rung: &[String],
 ) -> Result<CommandBuilder> {
     let (program, rest) = spec.argv.split_first().context("empty profile command")?;
     // A relative path containing '/' would otherwise resolve against the new
@@ -44,6 +47,7 @@ pub fn build_command(
     cmd.args(rest);
     cmd.arg("--settings");
     cmd.arg(hooks);
+    cmd.args(rung);
     cmd.args(&spec.args);
     cmd.cwd(&spec.repo);
     cmd.env("TERM", "xterm-256color");
@@ -65,9 +69,10 @@ pub fn spawn(
     id: &SessionId,
     sock: &Path,
     hooks: &Path,
+    rung: &[String],
     size: (u16, u16),
 ) -> Result<Spawned> {
-    let cmd = build_command(spec, id, sock, hooks)?;
+    let cmd = build_command(spec, id, sock, hooks, rung)?;
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: size.0,
@@ -124,12 +129,21 @@ mod tests {
             &id,
             Path::new("/run/baton.sock"),
             Path::new("/run/hooks.json"),
+            &["--resume".to_owned(), "abc".to_owned()],
         )
         .unwrap();
         let argv: Vec<_> = cmd.get_argv().iter().map(|a| a.to_string_lossy()).collect();
         assert_eq!(
             argv,
-            ["bash", "--norc", "--settings", "/run/hooks.json", "-i"]
+            [
+                "bash",
+                "--norc",
+                "--settings",
+                "/run/hooks.json",
+                "--resume",
+                "abc",
+                "-i"
+            ]
         );
         assert_eq!(
             cmd.get_cwd().map(|c| c.as_os_str()),
@@ -149,6 +163,6 @@ mod tests {
         let mut s = spec();
         s.argv.clear();
         let id = SessionId("x//tmp".into());
-        assert!(build_command(&s, &id, Path::new("/s"), Path::new("/h")).is_err());
+        assert!(build_command(&s, &id, Path::new("/s"), Path::new("/h"), &[]).is_err());
     }
 }

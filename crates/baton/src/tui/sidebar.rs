@@ -141,6 +141,7 @@ mod tests {
             started_at: 0,
             exit_code: None,
             usage: None,
+            launch: None,
         }
     }
 

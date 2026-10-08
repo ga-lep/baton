@@ -17,6 +17,7 @@ fn info(id: &str, status: Status) -> SessionInfo {
         started_at: 0,
         exit_code: None,
         usage: None,
+        launch: None,
     }
 }
 
@@ -683,4 +684,95 @@ fn client_view_is_resent_after_reconnecting() {
         Instant::now(),
     );
     assert_eq!(views(&fx), vec![(Some(sid("x//a")), true)]);
+}
+
+fn restarts(effects: &[Effect]) -> Vec<SessionId> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Send(ClientMsg::Restart { session }) => Some(session.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn app_with(a: Status, b: Status) -> App {
+    let mut app = App::new(HOST);
+    app.on_daemon(
+        DaemonMsg::SessionList(vec![info("x//a", a), info("x//b", b)]),
+        Instant::now(),
+    );
+    app
+}
+
+#[test]
+fn r_restarts_a_quiet_session_without_asking() {
+    for status in [
+        Status::Idle,
+        Status::YourTurn,
+        Status::Starting,
+        Status::Unknown,
+        Status::Exited(1),
+    ] {
+        let mut app = app_with(status, Status::Idle);
+        let effects = app.on_event(key(KeyCode::Char('r')), HOST);
+        assert_eq!(restarts(&effects), [sid("x//a")], "{status:?}");
+        assert_eq!(app.confirm_prompt(), None, "{status:?}");
+    }
+}
+
+#[test]
+fn r_asks_before_restarting_a_running_or_permission_session() {
+    for status in [Status::Running, Status::Permission] {
+        let mut app = app_with(status, Status::Idle);
+        let effects = app.on_event(key(KeyCode::Char('r')), HOST);
+        assert!(restarts(&effects).is_empty(), "{status:?}");
+        assert_eq!(app.confirm_prompt().as_deref(), Some("Restart r? [y/N]"));
+        let effects = app.on_event(key(KeyCode::Char('y')), HOST);
+        assert_eq!(restarts(&effects), [sid("x//a")], "{status:?}");
+        assert_eq!(app.confirm_prompt(), None);
+    }
+}
+
+#[test]
+fn anything_but_y_cancels_the_restart_prompt() {
+    for answer in [
+        KeyCode::Char('n'),
+        KeyCode::Char('N'),
+        KeyCode::Esc,
+        KeyCode::Enter,
+        KeyCode::Char('r'),
+    ] {
+        let mut app = app_with(Status::Running, Status::Idle);
+        app.on_event(key(KeyCode::Char('r')), HOST);
+        let effects = app.on_event(key(answer), HOST);
+        assert!(restarts(&effects).is_empty(), "{answer:?}");
+        assert_eq!(app.confirm_prompt(), None, "{answer:?}");
+        // The answer was consumed: it did not also move or focus anything.
+        assert_eq!(app.mode, Mode::Normal);
+    }
+}
+
+#[test]
+fn r_targets_the_session_under_the_cursor_and_does_nothing_on_a_project_row() {
+    let mut app = app_with(Status::Idle, Status::Idle);
+    app.on_event(key(KeyCode::Char('j')), HOST);
+    let effects = app.on_event(key(KeyCode::Char('r')), HOST);
+    assert_eq!(restarts(&effects), [sid("x//b")]);
+
+    let mut app = App::new(HOST);
+    app.set_projects(vec!["x".into()]);
+    assert!(
+        restarts(&app.on_event(key(KeyCode::Char('r')), HOST)).is_empty(),
+        "no session to restart"
+    );
+}
+
+#[test]
+fn r_is_data_in_focus_mode() {
+    let mut app = app_with(Status::Idle, Status::Idle);
+    app.mode = Mode::Focus;
+    let effects = app.on_event(key(KeyCode::Char('r')), HOST);
+    assert!(restarts(&effects).is_empty());
+    assert_eq!(sent(&effects), [(sid("x//a"), b"r".to_vec())]);
 }

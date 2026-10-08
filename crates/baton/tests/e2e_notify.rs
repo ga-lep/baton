@@ -65,6 +65,21 @@ impl Env {
         Ok(())
     }
 
+    /// Waits until the session has started (its `SessionStart` hook fired).
+    /// A first launch in a repo without history fails its `--continue`
+    /// attempt and relaunches, so input sent earlier would be lost.
+    fn wait_idle(&self) -> Result<()> {
+        let end = std::time::Instant::now() + WAIT;
+        loop {
+            let out = self.baton(&["debug", "sessions", "--json"])?;
+            if String::from_utf8_lossy(&out.stdout).contains("\"Idle\"") {
+                return Ok(());
+            }
+            anyhow::ensure!(std::time::Instant::now() < end, "never became idle");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     fn log_lines(&self) -> Vec<String> {
         std::fs::read_to_string(self.dir.path().join("state/notifications.log"))
             .map(|t| t.lines().map(str::to_owned).collect())
@@ -113,6 +128,7 @@ fn notifies_when_no_tui_is_attached_and_not_again_while_in_the_state() -> Result
     let env = Env::new("")?;
     let out = env.baton(&["debug", "open", "x"])?;
     assert!(out.status.success(), "{out:?}");
+    env.wait_idle()?;
     env.send("perm\\r")?;
     let lines = env.wait_lines(1)?;
     assert_eq!(lines, [format!("notify {} Permission", env.session_id()?)]);
@@ -166,6 +182,7 @@ fn notifications_can_be_disabled_in_the_config() -> Result<()> {
     let env = Env::new("notifications = false")?;
     let out = env.baton(&["debug", "open", "x"])?;
     assert!(out.status.success(), "{out:?}");
+    env.wait_idle()?;
     env.send("perm\\r")?;
     let id = env.session_id()?;
     // Wait until the status change has surely happened.

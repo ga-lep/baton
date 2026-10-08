@@ -33,6 +33,8 @@ enum Sub {
     },
     /// Type text into a session (escapes: \r \n \t \e \\ \xNN).
     Send { session: String, text: String },
+    /// Kill a session's child and launch it again, resuming its conversation.
+    Restart { session: String },
     /// Attach and print the session screen as text.
     Screen {
         session: String,
@@ -82,6 +84,7 @@ async fn dispatch(cmd: Sub) -> Result<()> {
         Sub::Open { project } => open(&project).await,
         Sub::Sessions { json } => sessions(json).await,
         Sub::Send { session, text } => send(&session, &text).await,
+        Sub::Restart { session } => restart(&session).await,
         Sub::Screen {
             session,
             rows,
@@ -163,6 +166,17 @@ async fn send(session: &str, text: &str) -> Result<()> {
     })
     .await?;
     // A Status round trip surfaces an error reply to the Input, if any.
+    fetch_sessions(&mut conn).await?;
+    Ok(())
+}
+
+async fn restart(session: &str) -> Result<()> {
+    let mut conn = client::ensure_daemon(Role::Ctl).await?;
+    conn.send(&ClientMsg::Restart {
+        session: SessionId(session.to_owned()),
+    })
+    .await?;
+    // A Status round trip surfaces an error reply to the Restart, if any.
     fetch_sessions(&mut conn).await?;
     Ok(())
 }
@@ -280,6 +294,7 @@ mod tests {
         assert!(p(&["open", "x"]).is_ok());
         assert!(p(&["sessions", "--json"]).is_ok());
         assert!(p(&["send", "x//tmp", "hi\\r"]).is_ok());
+        assert!(p(&["restart", "x//tmp"]).is_ok());
         assert!(p(&["screen", "x//tmp", "--rows", "30", "--cols", "100"]).is_ok());
         assert!(p(&["scrollback", "x//tmp", "0", "10"]).is_ok());
         assert!(p(&["bogus"]).is_err());

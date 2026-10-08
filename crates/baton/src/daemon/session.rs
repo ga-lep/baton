@@ -1,14 +1,17 @@
 //! One session: a PTY child, its authoritative screen and the attached client.
 
 use super::notifier::{Notification, Notifier};
+use super::persist::{Store, now_secs};
 use super::registry::ChildGroups;
-use super::spawn;
+use super::{lifecycle, spawn};
 use crate::term::screen::Screen;
 use crate::term::vt100_screen::Vt100Screen;
 use anyhow::{Result, bail};
 use baton_core::config::SessionSpec;
 use baton_core::hooks::HookPayload;
+use baton_core::launch::{self, Rung};
 use baton_core::notify_rule::{self, ClientView};
+use baton_core::state::PersistedSession;
 use baton_core::status::{self, Input};
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
@@ -17,7 +20,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -46,7 +49,13 @@ pub enum Cmd {
         count: usize,
         reply: oneshot::Sender<Vec<Vec<u8>>>,
     },
-    Exited(i32),
+    /// The child of generation `generation` was reaped with `code`.
+    Exited {
+        generation: u64,
+        code: i32,
+    },
+    /// Kill the child (if any) and launch it again, resuming the conversation.
+    Restart,
     /// A hook fired in the child.
     Hook {
         event: String,
@@ -124,6 +133,30 @@ pub struct Launch<'a> {
     /// Whether desktop notifications are enabled (`notifications` in the config).
     pub notifications: bool,
     pub notifier: &'a Notifier,
+    /// The conversation id remembered from an earlier run, if any.
+    pub resume_id: Option<String>,
+    /// Where session metadata is persisted.
+    pub store: &'a Arc<Store>,
+}
+
+/// What a child process needs to be (re)started, kept for the session's life.
+struct Ctx {
+    id: SessionId,
+    spec: SessionSpec,
+    sock: std::path::PathBuf,
+    hooks: std::path::PathBuf,
+    groups: Arc<ChildGroups>,
+    cmd_tx: mpsc::UnboundedSender<Cmd>,
+    out_tx: mpsc::Sender<(u64, Vec<u8>)>,
+    store: Arc<Store>,
+    hook_timeout: Duration,
+}
+
+/// The current child: its PTY master, input queue and process group.
+struct Proc {
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    input: std_mpsc::SyncSender<Vec<u8>>,
+    pgid: Pid,
 }
 
 /// Spawns the child, its helper threads and the session task.
@@ -133,7 +166,83 @@ pub struct Launch<'a> {
 /// # Errors
 /// If the child cannot be started or its process group cannot be tracked.
 pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle> {
-    let mut sp = spawn::spawn(l.spec, &l.id, l.sock, l.hooks, l.size)?;
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let (out_tx, out_rx) = mpsc::channel::<(u64, Vec<u8>)>(OUTPUT_QUEUE);
+    let ctx = Ctx {
+        id: l.id.clone(),
+        spec: l.spec.clone(),
+        sock: l.sock.to_path_buf(),
+        hooks: l.hooks.to_path_buf(),
+        groups: Arc::clone(groups),
+        cmd_tx: cmd_tx.clone(),
+        out_tx,
+        store: Arc::clone(l.store),
+        hook_timeout: l.hook_timeout,
+    };
+    let rung = launch::first_rung(l.resume_id.as_deref());
+    let generation = 1;
+    let proc = launch_child(&ctx, &rung, generation, l.size)?;
+    tracing::info!(session = ?l.id.0, launch = rung.label(), "launching");
+
+    let started_at = now_secs();
+    let info = Arc::new(Mutex::new(SessionInfo {
+        id: l.id.clone(),
+        project: l.spec.project.clone(),
+        repo: l.spec.repo.display().to_string(),
+        profile: Some(l.spec.profile.clone()),
+        status: Status::Starting,
+        claude_session_id: rung.known_session_id().map(str::to_owned),
+        transcript_path: None,
+        model: None,
+        started_at,
+        exit_code: None,
+        usage: None,
+        launch: Some(rung.label().to_owned()),
+    }));
+    let task = Task {
+        id: l.id.clone(),
+        screen: Vt100Screen::new(l.size.0, l.size.1, l.scrollback),
+        proc,
+        generation,
+        rung,
+        launched_at: Instant::now(),
+        saw_start: false,
+        ctx,
+        info: Arc::clone(&info),
+        client: None,
+        exited: false,
+        status: Status::Starting,
+        view: None,
+        notifications: l.notifications,
+        notifier: l.notifier.clone(),
+        project: l.spec.project.clone(),
+        repo_name: l.spec.repo.file_name().map_or_else(
+            || l.spec.repo.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        deadline: Some(Instant::now() + l.hook_timeout),
+    };
+    task.persist();
+    tokio::spawn(task.run(cmd_rx, out_rx));
+    Ok(SessionHandle {
+        id: l.id.clone(),
+        info,
+        tx: cmd_tx,
+    })
+}
+
+/// Starts one child of generation `generation` with the arguments of `rung`, its
+/// helper threads included. Output and the exit are tagged with `generation` so the
+/// session can ignore a child it has already replaced.
+fn launch_child(ctx: &Ctx, rung: &Rung, generation: u64, size: (u16, u16)) -> Result<Proc> {
+    let mut sp = spawn::spawn(
+        &ctx.spec,
+        &ctx.id,
+        &ctx.sock,
+        &ctx.hooks,
+        &rung.args(),
+        size,
+    )?;
     let pgid = match i32::try_from(sp.pid)
         .map_err(anyhow::Error::from)
         .and_then(|p| nix::unistd::getpgid(Some(Pid::from_raw(p))).map_err(Into::into))
@@ -144,23 +253,24 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
             bail!("cannot determine process group: {e}");
         }
     };
-    if let Err(e) = groups.register(pgid) {
+    if let Err(e) = ctx.groups.register(pgid) {
         reap(&mut sp.child);
         bail!("{e}");
     }
 
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>(OUTPUT_QUEUE);
     let (in_tx, in_rx) = std_mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE);
-
     let mut reader = sp.reader;
+    let out_tx = ctx.out_tx.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if out_tx.blocking_send(buf[..n].to_vec()).is_err() {
+                    if out_tx
+                        .blocking_send((generation, buf[..n].to_vec()))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -182,8 +292,8 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         }
     });
     let mut child = sp.child;
-    let wait_tx = cmd_tx.clone();
-    let wait_groups = Arc::clone(groups);
+    let wait_tx = ctx.cmd_tx.clone();
+    let wait_groups = Arc::clone(&ctx.groups);
     std::thread::spawn(move || {
         let code = match child.wait() {
             Ok(status) => i32::try_from(status.exit_code()).unwrap_or(-1),
@@ -194,49 +304,12 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         };
         // Reaped: the group id may now be reused by an unrelated process.
         wait_groups.unregister(pgid);
-        let _ = wait_tx.send(Cmd::Exited(code));
+        let _ = wait_tx.send(Cmd::Exited { generation, code });
     });
-
-    let started_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let info = Arc::new(Mutex::new(SessionInfo {
-        id: l.id.clone(),
-        project: l.spec.project.clone(),
-        repo: l.spec.repo.display().to_string(),
-        profile: Some(l.spec.profile.clone()),
-        status: Status::Starting,
-        claude_session_id: None,
-        transcript_path: None,
-        model: None,
-        started_at,
-        exit_code: None,
-        usage: None,
-    }));
-    let task = Task {
-        id: l.id.clone(),
-        screen: Vt100Screen::new(l.size.0, l.size.1, l.scrollback),
+    Ok(Proc {
         master: sp.master,
         input: in_tx,
-        info: Arc::clone(&info),
-        client: None,
-        exited: false,
-        status: Status::Starting,
-        view: None,
-        notifications: l.notifications,
-        notifier: l.notifier.clone(),
-        project: l.spec.project.clone(),
-        repo_name: l.spec.repo.file_name().map_or_else(
-            || l.spec.repo.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        ),
-        deadline: Some(Instant::now() + l.hook_timeout),
-    };
-    tokio::spawn(task.run(cmd_rx, out_rx));
-    Ok(SessionHandle {
-        id: l.id.clone(),
-        info,
-        tx: cmd_tx,
+        pgid,
     })
 }
 
@@ -249,8 +322,15 @@ fn reap(child: &mut Box<dyn portable_pty::Child + Send + Sync>) {
 struct Task {
     id: SessionId,
     screen: Vt100Screen,
-    master: Box<dyn portable_pty::MasterPty + Send>,
-    input: std_mpsc::SyncSender<Vec<u8>>,
+    proc: Proc,
+    /// Generation of the current child; bumped at every relaunch.
+    generation: u64,
+    /// The rung the current child was started with.
+    rung: Rung,
+    launched_at: Instant,
+    /// A `SessionStart` hook arrived from the current child.
+    saw_start: bool,
+    ctx: Ctx,
     info: Arc<Mutex<SessionInfo>>,
     client: Option<ClientSink>,
     exited: bool,
@@ -270,7 +350,7 @@ impl Task {
     async fn run(
         mut self,
         mut cmds: mpsc::UnboundedReceiver<Cmd>,
-        mut output: mpsc::Receiver<Vec<u8>>,
+        mut output: mpsc::Receiver<(u64, Vec<u8>)>,
     ) {
         let mut output_open = true;
         loop {
@@ -287,18 +367,24 @@ impl Task {
                 }
                 cmd = cmds.recv() => match cmd {
                     None => return,
-                    Some(Cmd::Exited(code)) => {
-                        while let Ok(Some(chunk)) =
+                    // A child that was replaced (restart) is not this session's business.
+                    Some(Cmd::Exited { generation, .. }) if generation != self.generation => {}
+                    Some(Cmd::Exited { code, .. }) => {
+                        while let Ok(Some((generation, chunk))) =
                             tokio::time::timeout(DRAIN_TIMEOUT, output.recv()).await
                         {
-                            self.on_output(&chunk);
+                            if generation == self.generation {
+                                self.on_output(&chunk);
+                            }
                         }
-                        self.on_exit(code);
+                        self.on_child_exit(code);
                     }
+                    Some(Cmd::Restart) => self.restart().await,
                     Some(cmd) => self.handle(cmd),
                 },
                 chunk = output.recv(), if output_open => match chunk {
-                    Some(chunk) => self.on_output(&chunk),
+                    Some((generation, chunk)) if generation == self.generation => self.on_output(&chunk),
+                    Some(_) => {}
                     None => output_open = false,
                 },
             }
@@ -323,7 +409,7 @@ impl Task {
                 self.apply(Input::Viewed);
             }
             Cmd::MarkViewed => self.apply(Input::Viewed),
-            Cmd::Exited(_) => {} // handled in `run`
+            Cmd::Exited { .. } | Cmd::Restart => {} // handled in `run`
         }
     }
 
@@ -331,7 +417,7 @@ impl Task {
         if self.exited || bytes.is_empty() {
             return;
         }
-        if let Err(std_mpsc::TrySendError::Full(_)) = self.input.try_send(bytes) {
+        if let Err(std_mpsc::TrySendError::Full(_)) = self.proc.input.try_send(bytes) {
             tracing::warn!(session = %self.id, "input queue full; dropping input");
         }
     }
@@ -343,7 +429,7 @@ impl Task {
             pixel_width: 0,
             pixel_height: 0,
         };
-        if let Err(e) = self.master.resize(size) {
+        if let Err(e) = self.proc.master.resize(size) {
             tracing::debug!(session = %self.id, "pty resize: {e}");
         }
     }
@@ -385,6 +471,102 @@ impl Task {
         });
     }
 
+    /// The current child exited. An early failure moves down the launch
+    /// ladder instead of ending the session while a rung is left.
+    fn on_child_exit(&mut self, code: i32) {
+        if launch::is_early_failure(code, self.launched_at.elapsed(), self.saw_start)
+            && let Some(next) = self.rung.next(|| uuid::Uuid::new_v4().to_string())
+        {
+            tracing::info!(
+                session = ?self.id.0,
+                code,
+                from = self.rung.label(),
+                to = next.label(),
+                "launch attempt failed early; trying the next rung"
+            );
+            match self.relaunch(next) {
+                Ok(()) => return,
+                Err(e) => tracing::warn!(session = ?self.id.0, "cannot relaunch: {e:#}"),
+            }
+        }
+        self.on_exit(code);
+    }
+
+    /// Replaces the child: kills the old process group (if it is still ours
+    /// and alive), then launches again from the first rung for the known
+    /// conversation, keeping the screen object.
+    async fn restart(&mut self) {
+        let pgid = self.proc.pgid;
+        // `contains` is false once the leader was reaped: the id may then
+        // belong to an unrelated process and must not be signalled.
+        if !self.exited && self.ctx.groups.contains(pgid) {
+            tracing::info!(session = ?self.id.0, "restart: terminating the child's group");
+            lifecycle::terminate_groups(&[pgid], super::KILL_GRACE).await;
+        }
+        let known = self
+            .info
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .claude_session_id
+            .clone();
+        let rung = launch::first_rung(known.as_deref());
+        if let Err(e) = self.relaunch(rung) {
+            tracing::warn!(session = ?self.id.0, "restart failed: {e:#}");
+            self.forward(DaemonMsg::Error {
+                message: format!("restart failed: {e:#}"),
+            });
+        }
+    }
+
+    /// Starts a new child with `rung` in place of the current one.
+    fn relaunch(&mut self, rung: Rung) -> Result<()> {
+        let generation = self.generation + 1;
+        let proc = launch_child(&self.ctx, &rung, generation, self.screen.size())?;
+        tracing::info!(session = ?self.id.0, launch = rung.label(), "launching");
+        self.proc = proc;
+        self.generation = generation;
+        self.exited = false;
+        self.saw_start = false;
+        self.launched_at = Instant::now();
+        self.deadline = Some(self.launched_at + self.ctx.hook_timeout);
+        // RIS: the new child starts on a clean screen (the replies are moot).
+        self.screen.process(b"\x1bc");
+        {
+            let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
+            info.exit_code = None;
+            info.launch = Some(rung.label().to_owned());
+            info.claude_session_id = rung.known_session_id().map(str::to_owned);
+            if !matches!(rung, Rung::Resume(_)) {
+                info.transcript_path = None;
+            }
+        }
+        self.rung = rung;
+        self.apply(Input::Spawn);
+        self.persist();
+        // The client's copy of the screen is stale: send it a fresh snapshot.
+        if let Some(sink) = self.client.clone() {
+            self.attach(sink, false);
+        }
+        Ok(())
+    }
+
+    /// Records the session in `state.json` (written back after a debounce).
+    fn persist(&self) {
+        let info = self.info.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.ctx.store.put(
+            &self.id,
+            PersistedSession {
+                project: info.project,
+                repo: info.repo,
+                profile: info.profile,
+                claude_session_id: info.claude_session_id,
+                transcript_path: info.transcript_path,
+                last_status: self.status,
+                updated_at: now_secs(),
+            },
+        );
+    }
+
     fn on_exit(&mut self, code: i32) {
         self.exited = true;
         self.deadline = None;
@@ -406,6 +588,9 @@ impl Task {
             info.claude_session_id = checked.session_id;
             info.transcript_path = checked.transcript_path;
             info.model = checked.model;
+            drop(info);
+            self.saw_start = true;
+            self.persist();
         }
         self.apply(Input::Hook {
             event,
@@ -432,6 +617,7 @@ impl Task {
         }
         self.status = to;
         self.info.lock().unwrap_or_else(|e| e.into_inner()).status = to;
+        self.persist();
         self.forward(DaemonMsg::StatusChanged {
             session: self.id.clone(),
             status: to,

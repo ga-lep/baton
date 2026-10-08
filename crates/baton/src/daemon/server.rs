@@ -1,6 +1,7 @@
 //! Socket accept loop and per-connection protocol handling.
 
 use super::notifier::{self, Notifier, SinkKind};
+use super::persist::Store;
 use super::registry::{CLIENT_QUEUE, ChildGroups, Registry, validate_size};
 use super::session::ClientSink;
 use baton_proto::{ClientMsg, DaemonMsg, MAX_INPUT, PROTOCOL_VERSION, decode, encode, framed};
@@ -25,6 +26,8 @@ pub struct State {
     pub groups: Arc<ChildGroups>,
     /// Live sessions and the attached client.
     pub registry: Registry,
+    /// Persisted session metadata (`state.json`).
+    pub store: Arc<Store>,
     next_conn: AtomicU64,
 }
 
@@ -36,8 +39,17 @@ impl State {
         // Without a usable state dir only the (stateless) D-Bus sink can work.
         let state_dir = baton_core::paths::state_dir().unwrap_or_default();
         let notifier = Notifier::spawn(kind.build(&state_dir));
+        // Without a usable state dir sessions are simply not remembered.
+        let store = match baton_core::paths::state_json_path() {
+            Ok(path) => Store::load(path),
+            Err(e) => {
+                tracing::warn!("no state file, sessions will not be remembered: {e}");
+                Store::in_memory()
+            }
+        };
         Self {
-            registry: Registry::new(Arc::clone(&groups), notifier),
+            registry: Registry::new(Arc::clone(&groups), notifier, Arc::clone(&store)),
+            store,
             groups,
             next_conn: AtomicU64::new(1),
         }
@@ -240,6 +252,7 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
                     Err(e) => error(e),
                 },
             ),
+            ClientMsg::Restart { session } => state.registry.restart(&session).err().map(error),
             ClientMsg::Hook {
                 baton_session,
                 event,
@@ -261,7 +274,6 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
             ClientMsg::MarkViewed { session } => {
                 state.registry.mark_viewed(&session).err().map(error)
             }
-            _ => Some(error("not supported yet")),
         };
         if let Some(reply) = reply
             && !send(&mut conn, &reply).await

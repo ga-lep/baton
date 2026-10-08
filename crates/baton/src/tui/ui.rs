@@ -110,6 +110,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 
     let bar = match app.hint {
+        _ if app.confirm_prompt().is_some() => {
+            format!(" NORMAL │ {}", app.confirm_prompt().unwrap_or_default())
+        }
         Some(hint) if focus => format!(" FOCUS │ {hint}"),
         Some(hint) => format!(" NORMAL │ {hint}"),
         None if focus => FOCUS_BAR.to_owned(),
@@ -138,6 +141,10 @@ fn info_text(app: &App) -> String {
         status_label(s.status),
         uptime(s.started_at, unix_now()),
     );
+    if let Some(launch) = &s.launch {
+        text.push_str("\nlaunch  ");
+        text.push_str(launch);
+    }
     if let Some(msg) = &app.notice {
         text.push_str("\n! ");
         text.push_str(msg);
@@ -203,6 +210,7 @@ mod tests {
             started_at: 0,
             exit_code: None,
             usage: None,
+            launch: None,
         };
         let now = Instant::now();
         app.on_daemon(DaemonMsg::SessionList(vec![info]), now);
@@ -224,6 +232,25 @@ mod tests {
         assert!(out.contains("1 ● a  running"), "{out}");
         assert!(out.contains("│mirrored text"), "{out}");
         assert!(out.contains(NORMAL_BAR.trim()), "{out}");
+    }
+
+    #[test]
+    fn info_panel_shows_the_launch_rung_and_the_bar_the_restart_question() {
+        let mut app = app_with_session();
+        app.sessions[0].launch = Some("resume".into());
+        let out = render(&app);
+        assert!(out.contains("launch  resume"), "{out}");
+        assert!(!out.contains("Restart a?"), "{out}");
+        app.on_event(
+            crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('r'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+            Rect::new(0, 0, 120, 40),
+        );
+        let out = render(&app);
+        assert!(out.contains("Restart a? [y/N]"), "{out}");
+        assert!(!out.contains(NORMAL_BAR.trim()), "{out}");
     }
 
     #[test]

@@ -105,7 +105,23 @@ pub fn ensure_runtime_dir() -> io::Result<PathBuf> {
     Ok(dir)
 }
 
-fn ensure_private_dir(dir: &Path, uid: u32) -> io::Result<()> {
+/// Creates the state directory (mode 0700) if missing and returns it, with
+/// the same ownership and permission checks as [`ensure_runtime_dir`].
+///
+/// # Errors
+/// If the directory cannot be determined, created, or is not private.
+pub fn ensure_state_dir() -> io::Result<PathBuf> {
+    let dir = state_dir()?;
+    ensure_private_dir(&dir, nix::unistd::getuid().as_raw())?;
+    Ok(dir)
+}
+
+/// Creates `dir` (mode 0700) if missing, then requires it to be a real
+/// directory (not a symlink) owned by `uid` with no group/other bits.
+///
+/// # Errors
+/// `PermissionDenied` if the checks fail; other I/O errors as they occur.
+pub fn ensure_private_dir(dir: &Path, uid: u32) -> io::Result<()> {
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -114,7 +130,7 @@ fn ensure_private_dir(dir: &Path, uid: u32) -> io::Result<()> {
     let deny = |why: String| {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("refusing to use runtime dir {}: {why}", dir.display()),
+            format!("refusing to use directory {}: {why}", dir.display()),
         ))
     };
     if !meta.file_type().is_dir() {

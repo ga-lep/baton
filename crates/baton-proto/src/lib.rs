@@ -41,6 +41,7 @@ mod tests {
             started_at: 1_700_000_000,
             exit_code: Some(0),
             usage: Some(usage()),
+            launch: Some("resume".into()),
         }
     }
 

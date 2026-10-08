@@ -138,11 +138,13 @@ fn bash_sessions_env_reattach_and_exit() -> Result<()> {
     env.debug(&["open", "x"])?;
     assert_eq!(env.screen(&a)?, screen);
 
-    env.debug(&["send", &a, "exit 3\\r"])?;
+    // A clean exit: a non-zero one before any hook would count as a failed
+    // launch attempt and walk the launch ladder (see e2e_resume).
+    env.debug(&["send", &a, "exit 0\\r"])?;
     wait_for(WAIT, || {
         let list = env.sessions().ok()?;
         list.iter()
-            .any(|s| s.id.0 == a && s.status == Status::Exited(3))
+            .any(|s| s.id.0 == a && s.status == Status::Exited(0))
             .then_some(())
     })?;
     let raw = env.debug(&["sessions", "--json"])?;
@@ -151,7 +153,7 @@ fn bash_sessions_env_reattach_and_exit() -> Result<()> {
     let other = list.iter().find(|s| s.id.0 == b).expect("b listed");
     assert_eq!(other.status, Status::Starting);
     let done = list.iter().find(|s| s.id.0 == a).expect("a listed");
-    assert_eq!(done.exit_code, Some(3));
+    assert_eq!(done.exit_code, Some(0));
     Ok(())
 }
 

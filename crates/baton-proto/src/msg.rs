@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bump on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Maximum size of one frame (16 MiB).
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -152,6 +152,8 @@ pub struct SessionInfo {
     pub started_at: u64,
     pub exit_code: Option<i32>,
     pub usage: Option<Usage>,
+    /// Launch rung of the current child: `resume`, `continue` or `fresh`.
+    pub launch: Option<String>,
 }
 
 /// Session status.

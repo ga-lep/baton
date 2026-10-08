@@ -85,6 +85,8 @@ pub struct App {
     pub pacer: RenderPacer,
     /// Last error reported by the daemon.
     pub notice: Option<String>,
+    /// The session a pending `Restart <repo>? [y/N]` prompt is about.
+    confirm: Option<SessionId>,
     size: (u16, u16),
     /// Whether the host terminal has focus (assumed until told otherwise).
     terminal_focused: bool,
@@ -130,6 +132,7 @@ impl App {
             layout,
             pacer,
             notice: None,
+            confirm: None,
             terminal_focused: true,
             sent_view: None,
         }
@@ -200,8 +203,16 @@ impl App {
         self.mode = Mode::Normal;
         self.overlay = Overlay::None;
         self.notice = None;
+        self.confirm = None;
         self.sent_view = None;
         self.pacer.mark_dirty();
+    }
+
+    /// The question of the pending restart confirmation, if there is one.
+    pub fn confirm_prompt(&self) -> Option<String> {
+        let id = self.confirm.as_ref()?;
+        let s = self.sessions.iter().find(|s| &s.id == id)?;
+        Some(format!("Restart {}? [y/N]", sidebar::repo_name(s)))
     }
 
     /// The daemon connection is gone.
@@ -364,6 +375,7 @@ impl App {
                 self.next_attention();
                 Vec::new()
             }
+            KeyCode::Char('r') if plain => self.ask_restart(),
             KeyCode::Char('o') if plain => self
                 .cursor_project()
                 .map_or_else(Vec::new, |n| self.open_project(n)),
@@ -380,6 +392,20 @@ impl App {
             }
             _ => return None,
         })
+    }
+
+    /// `r`: restart the shown session, after asking while it is working or
+    /// waiting for a permission.
+    fn ask_restart(&mut self) -> Vec<Effect> {
+        let Some(s) = self.selected_session() else {
+            return Vec::new();
+        };
+        let (id, status) = (s.id.clone(), s.status);
+        if matches!(status, Status::Running | Status::Permission) {
+            self.confirm = Some(id);
+            return Vec::new();
+        }
+        vec![Effect::Send(ClientMsg::Restart { session: id })]
     }
 
     /// `Enter` / `l`: focus a session, open a closed project, or step into an
@@ -626,6 +652,13 @@ impl App {
                 };
             }
             Overlay::None => {}
+        }
+        // The answer to a pending question is consumed by the question.
+        if let Some(id) = self.confirm.take() {
+            return match key.code {
+                KeyCode::Char('y' | 'Y') => vec![Effect::Send(ClientMsg::Restart { session: id })],
+                _ => Vec::new(),
+            };
         }
         if key.modifiers == KeyModifiers::ALT {
             match key.code {
