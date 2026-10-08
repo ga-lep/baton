@@ -1,6 +1,8 @@
 //! `baton` binary entry point.
 
 mod cli;
+#[allow(dead_code)] // consumed by the TUI client in later tasks
+mod term;
 
 use clap::Parser;
 use cli::{Cli, Command};
