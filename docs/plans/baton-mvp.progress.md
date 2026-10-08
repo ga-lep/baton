@@ -27,3 +27,6 @@ Task 7: complete (b47245e..40a19d5, gate ok, security PASS, review PASS, evidenc
   evidence: docs/plans/baton-mvp.evidence/task-7.md
   notes: [sec Low] for daemon tasks: socket dir 0700 + sock 0600 + SO_PEERCRED uid check, Hello.role not an authz signal; validate Resize/Attach rows/cols (0 or >1000) and clamp GetScrollback count; [sec Low] SessionId::from_repo lossy on non-UTF-8 paths, '/' in project names ambiguous; [sec Info] atomic-polyfill unmaintained via postcard->heapless; [review] encode returns Result (deliberate), trailing bytes reported as SerdeDeCustom
 Task 8: started
+Task 8: complete (26020e3..e907070, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/baton-mvp.evidence/task-8.md
+  notes: round 1 security FAIL [High] /tmp/baton-<uid> runtime dir trusted without owner/mode check -> fixed in e907070 (ensure_private_dir: no symlink, uid match, mode&077==0; HOME falls back to passwd); [sec Low] socket_path()/hooks_json_path() don't themselves enforce ensure_runtime_dir — daemon must call ensure_runtime_dir() first; [sec Low] editor template: split with shell_words THEN substitute {path} per-arg, never sh -c (Task 18); [sec Info] no perms check on config file; toml errors may echo a line; [review] deny_unknown_fields strict
