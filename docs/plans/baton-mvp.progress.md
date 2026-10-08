@@ -31,3 +31,6 @@ Task 8: complete (26020e3..e907070, gate ok, security PASS, review PASS, evidenc
   evidence: docs/plans/baton-mvp.evidence/task-8.md
   notes: round 1 security FAIL [High] /tmp/baton-<uid> runtime dir trusted without owner/mode check -> fixed in e907070 (ensure_private_dir: no symlink, uid match, mode&077==0; HOME falls back to passwd); [sec Low] socket_path()/hooks_json_path() don't themselves enforce ensure_runtime_dir — daemon must call ensure_runtime_dir() first; [sec Low] editor template: split with shell_words THEN substitute {path} per-arg, never sh -c (Task 18); [sec Info] no perms check on config file; toml errors may echo a line; [review] deny_unknown_fields strict
 Task 9: started
+Task 9: complete (a4757f1..a322672, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/baton-mvp.evidence/task-9.md
+  notes: [sec MEDIUM] client connect() trusts whatever listens on socket path: no runtime-dir check, no server peer uid check; start() connects before ensure_runtime_dir — carried into Task 10; [sec Low] daemon.log perms depend on umask, state dir not checked; [sec Low] killpg on registered pgid without pgid<=1 / own-group / reaped checks; [sec Info] no idle timeout after Hello, 64x16MiB buffers; [review] stop prints extra 'daemon stopped'; SIGTERM path lacks e2e test; start racing a shutting-down daemon gives generic timeout
