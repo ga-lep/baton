@@ -270,3 +270,31 @@ fn hook_for_an_unknown_session_is_dropped_and_daemon_survives() -> Result<()> {
     assert_ne!(list[0].claude_session_id.as_deref(), Some("zzz"));
     Ok(())
 }
+
+#[test]
+fn invalid_session_start_fields_are_not_stored() -> Result<()> {
+    let fake = bin_path("fake-claude")?;
+    let env = Env::new(&fake.display().to_string())?;
+    let id = env.id()?;
+    env.debug(&["open", "x"])?;
+    wait_for(WAIT, || {
+        env.sessions().ok()?.pop().filter(|s| s.model.is_some())
+    })?;
+    let sock = env.dir.path().join("run/baton.sock");
+    let sock = sock.to_str().unwrap_or_default();
+    let envs = [("BATON_SESSION", id.as_str()), ("BATON_SOCK", sock)];
+    let long = "m".repeat(129);
+    let payload = format!(
+        r#"{{"session_id":"a\u001b[2Jb","transcript_path":"relative.jsonl","model":"{long}"}}"#
+    );
+    let (out, took) = env.run_hook(&["hook", "SessionStart"], payload.as_bytes(), &envs)?;
+    assert_silent_success(&out, took, "bad SessionStart");
+    wait_for(WAIT, || {
+        let s = env.sessions().ok()?.pop()?;
+        (s.claude_session_id.is_none()).then_some(s)
+    })
+    .map(|s| {
+        assert_eq!(s.transcript_path, None);
+        assert_eq!(s.model, None);
+    })
+}

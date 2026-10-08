@@ -77,9 +77,99 @@ impl HookPayload {
     }
 }
 
+/// Longest accepted session id or model name.
+pub const MAX_ID_LEN: usize = 128;
+/// Longest accepted transcript path.
+pub const MAX_PATH_LEN: usize = 4096;
+
+fn clean(s: Option<String>, max: usize) -> Option<String> {
+    s.filter(|v| !v.is_empty() && v.len() <= max && !v.chars().any(char::is_control))
+}
+
+impl HookPayload {
+    /// Drops the fields the daemon stores from `SessionStart` unless they are
+    /// sane: ids and model at most [`MAX_ID_LEN`] bytes, the transcript path
+    /// at most [`MAX_PATH_LEN`] bytes and absolute, none empty or containing
+    /// control characters. The payload is client-supplied, so it is untrusted.
+    #[must_use]
+    pub fn validated(self) -> Self {
+        let transcript_path =
+            clean(self.transcript_path, MAX_PATH_LEN).filter(|p| Path::new(p).is_absolute());
+        Self {
+            session_id: clean(self.session_id, MAX_ID_LEN),
+            model: clean(self.model, MAX_ID_LEN),
+            transcript_path,
+            ..self
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn payload(id: &str, path: &str, model: &str) -> HookPayload {
+        HookPayload {
+            session_id: Some(id.into()),
+            transcript_path: Some(path.into()),
+            model: Some(model.into()),
+            ..HookPayload::default()
+        }
+    }
+
+    #[test]
+    fn sane_session_start_fields_pass() {
+        let p = payload(
+            "0b1c-uuid",
+            "/home/u/.claude/projects/x/s.jsonl",
+            "claude-opus-5-5",
+        );
+        assert_eq!(p.clone().validated(), p);
+        assert_eq!(HookPayload::default().validated(), HookPayload::default());
+    }
+
+    #[test]
+    fn overlong_fields_are_dropped_at_the_cap() {
+        let ok_id = "a".repeat(MAX_ID_LEN);
+        let ok_path = format!("/{}", "p".repeat(MAX_PATH_LEN - 1));
+        let p = payload(&ok_id, &ok_path, &ok_id).validated();
+        assert!(p.session_id.is_some() && p.model.is_some() && p.transcript_path.is_some());
+        let long_id = "a".repeat(MAX_ID_LEN + 1);
+        let long_path = format!("/{}", "p".repeat(MAX_PATH_LEN));
+        let p = payload(&long_id, &long_path, &long_id).validated();
+        assert_eq!(p.session_id, None);
+        assert_eq!(p.model, None);
+        assert_eq!(p.transcript_path, None);
+    }
+
+    #[test]
+    fn control_characters_are_rejected() {
+        for bad in ["a\nb", "a\x1b[2Jb", "\0", "a\u{85}b", "tab\there", "\x7f"] {
+            let p = payload(bad, &format!("/t/{bad}"), bad).validated();
+            assert_eq!(p.session_id, None, "{bad:?}");
+            assert_eq!(p.model, None, "{bad:?}");
+            assert_eq!(p.transcript_path, None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn empty_and_relative_values_are_rejected() {
+        let p = payload("", "", "").validated();
+        assert_eq!(p, HookPayload::default());
+        for rel in ["t.jsonl", "./t.jsonl", "../x", "projects/x.jsonl"] {
+            assert_eq!(payload("i", rel, "m").validated().transcript_path, None);
+        }
+    }
+
+    #[test]
+    fn other_fields_survive_validation() {
+        let mut p = payload("\n", "rel", "\n");
+        p.cwd = Some("/c".into());
+        p.notification_type = Some("idle_prompt".into());
+        let v = p.validated();
+        assert_eq!(v.cwd.as_deref(), Some("/c"));
+        assert_eq!(v.notification_type.as_deref(), Some("idle_prompt"));
+    }
 
     #[test]
     fn settings_match_golden_file() {

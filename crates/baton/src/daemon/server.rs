@@ -244,6 +244,14 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
                 state.registry.hook(&baton_session, &event, &payload_json);
                 None
             }
+            ClientMsg::ClientView { on_screen, .. } => {
+                // `terminal_focused` is for notifications (a later task).
+                state.registry.set_view(conn_id, on_screen);
+                None
+            }
+            ClientMsg::MarkViewed { session } => {
+                state.registry.mark_viewed(&session).err().map(error)
+            }
             _ => Some(error("not supported yet")),
         };
         if let Some(reply) = reply

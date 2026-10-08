@@ -8,6 +8,7 @@ use baton_core::paths;
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 use tokio::sync::oneshot;
 
 /// Largest accepted terminal dimension (rows or columns).
@@ -90,6 +91,8 @@ struct Inner {
     size: (u16, u16),
     nudge: bool,
     attached: Option<Attached>,
+    /// The session the attached client shows, if any.
+    view: Option<SessionId>,
 }
 
 /// Registry of sessions and the attached client.
@@ -122,6 +125,7 @@ impl Registry {
                 size: DEFAULT_SIZE,
                 nudge: true,
                 attached: None,
+                view: None,
             }),
             open_gate: Mutex::new(()),
         }
@@ -194,6 +198,7 @@ impl Registry {
                 hooks: &hooks,
                 size,
                 scrollback: config.scrollback_lines,
+                hook_timeout: Duration::from_secs(config.hook_timeout_secs),
             };
             // No registry lock here: spawning a PTY can be slow.
             match session::start(&launch, &self.groups) {
@@ -211,6 +216,9 @@ impl Registry {
                     rows: inner.size.0,
                     cols: inner.size.1,
                 });
+            }
+            if inner.view.as_ref() == Some(&handle.id) {
+                handle.send(Cmd::SetViewed(true));
             }
             fresh.push(handle.id.clone());
             match inner.sessions.iter().position(|s| s.id == handle.id) {
@@ -253,9 +261,33 @@ impl Registry {
         let payload = HookPayload::parse(payload_json);
         let inner = self.lock();
         match inner.sessions.iter().find(|s| &s.id == session) {
-            Some(s) => s.apply_hook(event, &payload),
-            None => tracing::debug!("dropping hook {event} for unknown session {session}"),
+            Some(s) => s.hook(event, payload),
+            // The id is client-supplied: `{:?}` escapes control characters.
+            None => tracing::debug!("dropping hook {event} for unknown session {:?}", session.0),
         }
+    }
+
+    /// Records which session the attached client `conn` shows and tells every
+    /// session whether it is on screen. Other connections are ignored.
+    pub fn set_view(&self, conn: u64, on_screen: Option<SessionId>) {
+        let mut inner = self.lock();
+        if inner.attached.as_ref().is_none_or(|a| a.conn != conn) {
+            return;
+        }
+        for s in &inner.sessions {
+            s.send(Cmd::SetViewed(on_screen.as_ref() == Some(&s.id)));
+        }
+        inner.view = on_screen;
+    }
+
+    /// Marks a session as seen, as if the user had looked at it.
+    ///
+    /// # Errors
+    /// If the session does not exist.
+    pub fn mark_viewed(&self, id: &SessionId) -> Result<(), String> {
+        let inner = self.lock();
+        find(&inner, id)?.send(Cmd::MarkViewed);
+        Ok(())
     }
 
     /// Forwards keyboard bytes to a session.
@@ -293,9 +325,11 @@ impl Registry {
             });
         }
         inner.size = (rows, cols);
+        inner.view = None; // the new client has not said what it shows yet
         let list = inner.sessions.iter().map(SessionHandle::info).collect();
         sink.send(DaemonMsg::SessionList(list));
         for s in &inner.sessions {
+            s.send(Cmd::SetViewed(false));
             s.send(Cmd::Resize { rows, cols });
             s.send(Cmd::Attach {
                 sink: sink.clone(),
@@ -309,6 +343,10 @@ impl Registry {
         let mut inner = self.lock();
         if inner.attached.as_ref().is_some_and(|a| a.conn == conn) {
             inner.attached = None;
+            inner.view = None;
+            for s in &inner.sessions {
+                s.send(Cmd::SetViewed(false));
+            }
         }
     }
 

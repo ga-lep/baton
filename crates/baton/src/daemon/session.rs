@@ -7,6 +7,7 @@ use crate::term::vt100_screen::Vt100Screen;
 use anyhow::{Result, bail};
 use baton_core::config::SessionSpec;
 use baton_core::hooks::HookPayload;
+use baton_core::status::{self, Input};
 use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
 use nix::unistd::Pid;
 use portable_pty::PtySize;
@@ -16,6 +17,7 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 /// Chunks queued between the PTY reader thread and the session task.
@@ -43,6 +45,15 @@ pub enum Cmd {
         reply: oneshot::Sender<Vec<Vec<u8>>>,
     },
     Exited(i32),
+    /// A hook fired in the child.
+    Hook {
+        event: String,
+        payload: HookPayload,
+    },
+    /// Whether the attached client has this session on screen.
+    SetViewed(bool),
+    /// The user explicitly marks the session as seen.
+    MarkViewed,
 }
 
 /// The attached client's outgoing queue plus the switch that makes its
@@ -81,19 +92,13 @@ impl SessionHandle {
         self.info.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    /// Applies a hook event to the session summary.
-    ///
-    /// `SessionStart` records the Claude session id, transcript path and
-    /// model, replacing earlier values (`/clear` starts a new conversation).
-    pub fn apply_hook(&self, event: &str, payload: &HookPayload) {
-        tracing::debug!("hook {event} session={}", self.id);
-        if event != "SessionStart" {
-            return;
-        }
-        let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
-        info.claude_session_id.clone_from(&payload.session_id);
-        info.transcript_path.clone_from(&payload.transcript_path);
-        info.model.clone_from(&payload.model);
+    /// Queues a hook event for the session task, which updates the summary
+    /// and the status in order with everything else.
+    pub fn hook(&self, event: &str, payload: HookPayload) {
+        self.send(Cmd::Hook {
+            event: event.to_owned(),
+            payload,
+        });
     }
 
     /// Queues a request; ignored if the task has gone away.
@@ -112,6 +117,8 @@ pub struct Launch<'a> {
     /// `(rows, cols)`.
     pub size: (u16, u16),
     pub scrollback: usize,
+    /// How long a live session may stay `Starting` before it is `Unknown`.
+    pub hook_timeout: Duration,
 }
 
 /// Spawns the child, its helper threads and the session task.
@@ -209,6 +216,9 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         info: Arc::clone(&info),
         client: None,
         exited: false,
+        status: Status::Starting,
+        viewed: false,
+        deadline: Some(Instant::now() + l.hook_timeout),
     };
     tokio::spawn(task.run(cmd_rx, out_rx));
     Ok(SessionHandle {
@@ -232,6 +242,11 @@ struct Task {
     info: Arc<Mutex<SessionInfo>>,
     client: Option<ClientSink>,
     exited: bool,
+    status: Status,
+    /// The attached client has this session on screen.
+    viewed: bool,
+    /// When a session still `Starting` becomes `Unknown`; cleared once fired.
+    deadline: Option<Instant>,
 }
 
 impl Task {
@@ -242,7 +257,17 @@ impl Task {
     ) {
         let mut output_open = true;
         loop {
+            let deadline = self.deadline;
             tokio::select! {
+                () = async {
+                    match deadline {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    self.deadline = None;
+                    self.apply(Input::HookTimeout);
+                }
                 cmd = cmds.recv() => match cmd {
                     None => return,
                     Some(Cmd::Exited(code)) => {
@@ -275,6 +300,12 @@ impl Task {
             } => {
                 let _ = reply.send(self.screen.scrollback_rows(start, count));
             }
+            Cmd::Hook { event, payload } => self.on_hook(&event, payload),
+            Cmd::SetViewed(on_screen) => {
+                self.viewed = on_screen;
+                self.apply(Input::Viewed);
+            }
+            Cmd::MarkViewed => self.apply(Input::Viewed),
             Cmd::Exited(_) => {} // handled in `run`
         }
     }
@@ -339,14 +370,51 @@ impl Task {
 
     fn on_exit(&mut self, code: i32) {
         self.exited = true;
-        {
+        self.deadline = None;
+        self.info
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .exit_code = Some(code);
+        self.apply(Input::Exited(code));
+    }
+
+    fn on_hook(&mut self, event: &str, payload: HookPayload) {
+        // The id is client-chosen text: `{:?}` keeps control characters out.
+        tracing::debug!("hook {event} session={:?}", self.id.0);
+        if event == "SessionStart" {
+            // Every SessionStart replaces the previous values (`/clear` makes a
+            // new conversation); invalid fields are dropped, not stored.
+            let checked = payload.clone().validated();
             let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
-            info.status = Status::Exited(code);
-            info.exit_code = Some(code);
+            info.claude_session_id = checked.session_id;
+            info.transcript_path = checked.transcript_path;
+            info.model = checked.model;
         }
+        self.apply(Input::Hook {
+            event,
+            notification_type: payload.notification_type.as_deref(),
+        });
+    }
+
+    /// Feeds `input` to the status machine; a session the client has on
+    /// screen is viewed at once, so a `Stop` seen live never needs attention.
+    fn apply(&mut self, input: Input<'_>) {
+        let before = self.status;
+        let (mut to, fx) = status::next(before, input);
+        if fx.unrecognized {
+            tracing::debug!(session = ?self.id.0, "ignoring unrecognized hook input {input:?}");
+        }
+        if self.viewed {
+            to = status::next(to, Input::Viewed).0;
+        }
+        if to == before {
+            return;
+        }
+        self.status = to;
+        self.info.lock().unwrap_or_else(|e| e.into_inner()).status = to;
         self.forward(DaemonMsg::StatusChanged {
             session: self.id.clone(),
-            status: Status::Exited(code),
+            status: to,
         });
     }
 

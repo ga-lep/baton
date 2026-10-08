@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use baton_proto::{ClientMsg, DaemonMsg, MAX_INPUT, SessionId, SessionInfo};
+use baton_core::attention;
+use baton_proto::{ClientMsg, DaemonMsg, MAX_INPUT, SessionId, SessionInfo, Status};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 use ratatui::layout::Rect;
 
@@ -45,6 +46,9 @@ pub enum Effect {
 /// Hint shown when scrolling is refused on the alternate screen.
 pub const ALT_SCREEN_HINT: &str = "app manages its own scrolling (mouse wheel)";
 
+/// Hint shown when `n` finds no session to jump to.
+pub const NO_ATTENTION_HINT: &str = "no session needs attention";
+
 /// A scroll request from the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scrolling {
@@ -82,6 +86,10 @@ pub struct App {
     /// Last error reported by the daemon.
     pub notice: Option<String>,
     size: (u16, u16),
+    /// Whether the host terminal has focus (assumed until told otherwise).
+    terminal_focused: bool,
+    /// The last `ClientView` sent, to send only changes.
+    sent_view: Option<(Option<SessionId>, bool)>,
 }
 
 fn inner_size(l: &Layout) -> (u16, u16) {
@@ -122,6 +130,8 @@ impl App {
             layout,
             pacer,
             notice: None,
+            terminal_focused: true,
+            sent_view: None,
         }
     }
 
@@ -190,6 +200,7 @@ impl App {
         self.mode = Mode::Normal;
         self.overlay = Overlay::None;
         self.notice = None;
+        self.sent_view = None;
         self.pacer.mark_dirty();
     }
 
@@ -210,6 +221,32 @@ impl App {
     /// Applies a daemon frame. Mirrors never answer terminal queries, so
     /// `Output` never yields an `Input`.
     pub fn on_daemon(&mut self, msg: DaemonMsg, now: Instant) -> Vec<Effect> {
+        let mut effects = self.apply_daemon(msg, now);
+        self.sync_view(&mut effects);
+        effects
+    }
+
+    /// Appends a `ClientView` if the shown session or terminal focus changed
+    /// since the last one sent.
+    fn sync_view(&mut self, effects: &mut Vec<Effect>) {
+        if self.overlay != Overlay::None {
+            return; // no usable daemon connection
+        }
+        let view = (
+            self.selected_session().map(|s| s.id.clone()),
+            self.terminal_focused,
+        );
+        if self.sent_view.as_ref() == Some(&view) {
+            return;
+        }
+        effects.push(Effect::Send(ClientMsg::ClientView {
+            on_screen: view.0.clone(),
+            terminal_focused: view.1,
+        }));
+        self.sent_view = Some(view);
+    }
+
+    fn apply_daemon(&mut self, msg: DaemonMsg, now: Instant) -> Vec<Effect> {
         match msg {
             DaemonMsg::SessionList(list) => self.set_sessions(list),
             DaemonMsg::Snapshot {
@@ -232,7 +269,7 @@ impl App {
             DaemonMsg::StatusChanged { session, status } => {
                 if let Some(s) = self.sessions.iter_mut().find(|s| s.id == session) {
                     s.status = status;
-                    if let baton_proto::Status::Exited(code) = status {
+                    if let Status::Exited(code) = status {
                         s.exit_code = Some(code);
                     }
                 }
@@ -323,6 +360,10 @@ impl App {
             KeyCode::Char('j') | KeyCode::Down if plain => self.step(1),
             KeyCode::Char('k') | KeyCode::Up if plain => self.step(-1),
             KeyCode::Enter | KeyCode::Char('l') if plain => self.activate(),
+            KeyCode::Char('n') if plain => {
+                self.next_attention();
+                Vec::new()
+            }
             KeyCode::Char('o') if plain => self
                 .cursor_project()
                 .map_or_else(Vec::new, |n| self.open_project(n)),
@@ -364,6 +405,27 @@ impl App {
                 None => self.open_project(name),
             },
             None => Vec::new(),
+        }
+    }
+
+    /// Jumps to the next session needing attention, or says there is none.
+    fn next_attention(&mut self) {
+        let sessions: Vec<(SessionId, Status)> = self
+            .rows()
+            .iter()
+            .filter_map(|r| match r {
+                Row::Session { info, .. } => Some((info.id.clone(), info.status)),
+                Row::Project { .. } => None,
+            })
+            .collect();
+        let order: Vec<Status> = sessions.iter().map(|(_, s)| *s).collect();
+        let current = self
+            .current
+            .as_ref()
+            .and_then(|c| sessions.iter().position(|(id, _)| id == c));
+        match attention::next_after(&order, current) {
+            Some(i) => self.go_to(Cursor::Session(sessions[i].0.clone())),
+            None => self.hint = Some(NO_ATTENTION_HINT),
         }
     }
 
@@ -495,6 +557,17 @@ impl App {
     /// Applies a terminal event for a host terminal of size `host`.
     pub fn on_event(&mut self, ev: Event, host: Rect) -> Vec<Effect> {
         match ev {
+            Event::FocusGained => self.terminal_focused = true,
+            Event::FocusLost => self.terminal_focused = false,
+            _ => {}
+        }
+        let mut effects = self.apply_event(ev, host);
+        self.sync_view(&mut effects);
+        effects
+    }
+
+    fn apply_event(&mut self, ev: Event, host: Rect) -> Vec<Effect> {
+        match ev {
             Event::Key(key) => self.on_key(&key),
             Event::Resize(..) => self.fit(host),
             // Everything else only reaches the application in focus mode.
@@ -553,6 +626,19 @@ impl App {
                 };
             }
             Overlay::None => {}
+        }
+        if key.modifiers == KeyModifiers::ALT {
+            match key.code {
+                KeyCode::Char('n') => {
+                    self.next_attention();
+                    return Vec::new();
+                }
+                KeyCode::Char(d @ '1'..='9') if self.mode == Mode::Focus => {
+                    self.pick(usize::from(d as u8 - b'0'));
+                    return Vec::new();
+                }
+                _ => {}
+            }
         }
         if self.mode == Mode::Normal
             && let Some(effects) = self.on_sidebar_key(key)

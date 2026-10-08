@@ -561,3 +561,126 @@ fn scroll_keys_are_data_in_focus_mode() {
     let fx = app.on_event(ctrl('u'), HOST);
     assert_eq!(sent(&fx), vec![(sid("x//a"), vec![0x15])]);
 }
+
+fn alt(c: char) -> Event {
+    Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT))
+}
+
+fn views(effects: &[Effect]) -> Vec<(Option<SessionId>, bool)> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Send(ClientMsg::ClientView {
+                on_screen,
+                terminal_focused,
+            }) => Some((on_screen.clone(), *terminal_focused)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `app()` with `x//a` running, `x//b` idle and a third session `x//c`.
+fn three(a: Status, b: Status, c: Status) -> App {
+    let mut app = App::new(HOST);
+    app.on_daemon(
+        DaemonMsg::SessionList(vec![info("x//a", a), info("x//b", b), info("x//c", c)]),
+        Instant::now(),
+    );
+    app
+}
+
+#[test]
+fn n_jumps_to_the_next_attention_session_after_the_current_one() {
+    let mut app = three(Status::Idle, Status::Permission, Status::YourTurn);
+    assert_eq!(shown(&app), Some("x//a"));
+    app.on_event(ch('n'), HOST);
+    assert_eq!(shown(&app), Some("x//b"));
+    cursor_is(&app, Cursor::Session(sid("x//b")));
+    app.on_event(ch('n'), HOST);
+    assert_eq!(shown(&app), Some("x//c"));
+    app.on_event(ch('n'), HOST);
+    assert_eq!(shown(&app), Some("x//b"), "wraps, skipping idle a");
+    assert_eq!(app.mode, Mode::Normal);
+}
+
+#[test]
+fn n_with_nothing_to_attend_to_shows_a_hint_and_stays_put() {
+    let mut app = three(Status::Idle, Status::Running, Status::Exited(0));
+    app.on_event(ch('n'), HOST);
+    assert_eq!(shown(&app), Some("x//a"));
+    assert_eq!(app.hint, Some(NO_ATTENTION_HINT));
+    assert_eq!(NO_ATTENTION_HINT, "no session needs attention");
+    // The only attention session being the current one counts as none.
+    let mut app = three(Status::YourTurn, Status::Idle, Status::Idle);
+    app.on_event(ch('n'), HOST);
+    assert_eq!(app.hint, Some(NO_ATTENTION_HINT));
+    // The hint goes away with the next key.
+    app.on_event(ch('j'), HOST);
+    assert_eq!(app.hint, None);
+}
+
+#[test]
+fn n_is_data_in_focus_mode_but_alt_n_jumps_and_stays_focused() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Permission);
+    app.on_event(key(KeyCode::Enter), HOST);
+    assert_eq!(app.mode, Mode::Focus);
+    let fx = app.on_event(ch('n'), HOST);
+    assert_eq!(sent(&fx), vec![(sid("x//a"), b"n".to_vec())]);
+    let fx = app.on_event(alt('n'), HOST);
+    assert_eq!(app.mode, Mode::Focus);
+    assert_eq!(shown(&app), Some("x//c"));
+    assert!(sent(&fx).is_empty(), "Alt-n is not forwarded: {fx:?}");
+}
+
+#[test]
+fn alt_digits_switch_sessions_in_focus_mode() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.on_event(key(KeyCode::Enter), HOST);
+    let fx = app.on_event(alt('3'), HOST);
+    assert_eq!(shown(&app), Some("x//c"));
+    assert_eq!(app.mode, Mode::Focus);
+    assert!(sent(&fx).is_empty());
+    app.on_event(alt('1'), HOST);
+    assert_eq!(shown(&app), Some("x//a"));
+    app.on_event(alt('9'), HOST);
+    assert_eq!(shown(&app), Some("x//a"), "no 9th session: unchanged");
+}
+
+#[test]
+fn client_view_is_sent_when_the_selection_or_terminal_focus_changes() {
+    let mut app = App::new(HOST);
+    let fx = app.on_daemon(
+        DaemonMsg::SessionList(vec![info("x//a", Status::Idle), info("x//b", Status::Idle)]),
+        Instant::now(),
+    );
+    assert_eq!(views(&fx), vec![(Some(sid("x//a")), true)]);
+    // Nothing changed: nothing sent.
+    let fx = app.on_daemon(
+        DaemonMsg::StatusChanged {
+            session: sid("x//b"),
+            status: Status::Running,
+        },
+        Instant::now(),
+    );
+    assert!(views(&fx).is_empty());
+    let fx = app.on_event(ch('j'), HOST);
+    assert_eq!(views(&fx), vec![(Some(sid("x//b")), true)]);
+    let fx = app.on_event(Event::FocusLost, HOST);
+    assert_eq!(views(&fx), vec![(Some(sid("x//b")), false)]);
+    let fx = app.on_event(Event::FocusGained, HOST);
+    assert_eq!(views(&fx), vec![(Some(sid("x//b")), true)]);
+    // Moving back up shows the first session again.
+    let fx = app.on_event(ch('k'), HOST);
+    assert_eq!(views(&fx), vec![(Some(sid("x//a")), true)]);
+}
+
+#[test]
+fn client_view_is_resent_after_reconnecting() {
+    let mut app = app();
+    app.on_connected();
+    let fx = app.on_daemon(
+        DaemonMsg::SessionList(vec![info("x//a", Status::Idle)]),
+        Instant::now(),
+    );
+    assert_eq!(views(&fx), vec![(Some(sid("x//a")), true)]);
+}

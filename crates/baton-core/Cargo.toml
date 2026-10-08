@@ -9,6 +9,7 @@ publish = false
 workspace = true
 
 [dependencies]
+baton-proto.workspace = true
 nix = { workspace = true, features = ["user"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

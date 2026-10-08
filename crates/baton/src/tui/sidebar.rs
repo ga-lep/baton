@@ -1,9 +1,10 @@
 //! The project tree: configured projects merged with the daemon's sessions.
 
+use baton_core::attention::needs_attention;
 use baton_core::config::Config;
 use baton_core::paths;
 use baton_proto::{SessionId, SessionInfo, Status};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::ListItem;
 
 use super::labels::{badge, status_label};
@@ -65,15 +66,21 @@ impl Row<'_> {
         }
     }
 
-    /// The list item for this row; projects without live sessions are dim.
-    pub fn item(&self) -> ListItem<'static> {
-        let item = ListItem::new(self.text());
+    /// The style of this row: projects without live sessions are dim and
+    /// sessions that need attention are highlighted.
+    pub fn style(&self) -> Style {
         match self {
-            Row::Project { live: false, .. } => {
-                item.style(Style::default().add_modifier(Modifier::DIM))
-            }
-            _ => item,
+            Row::Project { live: false, .. } => Style::default().add_modifier(Modifier::DIM),
+            Row::Session { info, .. } if needs_attention(info.status) => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            _ => Style::default(),
         }
+    }
+
+    /// The list item for this row.
+    pub fn item(&self) -> ListItem<'static> {
+        ListItem::new(self.text()).style(self.style())
     }
 }
 
@@ -174,5 +181,34 @@ mod tests {
             })
             .collect();
         assert_eq!(live, vec![false, true, false]);
+    }
+
+    #[test]
+    fn sessions_needing_attention_are_highlighted() {
+        let sessions = vec![
+            info("a", "/r/p", Status::Permission),
+            info("a", "/r/y", Status::YourTurn),
+            info("a", "/r/i", Status::Idle),
+            info("a", "/r/r", Status::Running),
+            info("a", "/r/u", Status::Unknown),
+        ];
+        let styles: Vec<Style> = rows(&["a".to_owned()], &sessions)
+            .iter()
+            .skip(1)
+            .map(Row::style)
+            .collect();
+        let hot = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
+        assert_eq!(
+            styles,
+            vec![
+                hot,
+                hot,
+                Style::default(),
+                Style::default(),
+                Style::default()
+            ]
+        );
     }
 }
