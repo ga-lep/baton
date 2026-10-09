@@ -8,9 +8,11 @@
 
 use crate::client::{self, ClientError};
 use crate::daemon::spawn::build_command;
+use crate::update;
 use baton_core::config::{Config, SessionSpec};
 use baton_core::hooks::shell_quote;
 use baton_core::paths;
+use baton_core::update::Outcome;
 use baton_proto::{PROTOCOL_VERSION, Role, SessionId};
 use portable_pty::{Child, MasterPty, PtySize, native_pty_system};
 use serde_json::{Value, json};
@@ -96,6 +98,7 @@ pub fn run(no_probe: bool) -> ExitCode {
         }
     }
     check_notify(&mut report);
+    check_version(&mut report);
     if report.failed {
         ExitCode::FAILURE
     } else {
@@ -464,6 +467,65 @@ fn check_notify(report: &mut Report) {
         ),
         (true, false) => report.emit(Level::Warn, "notify: no D-Bus session bus found".to_owned()),
     }
+}
+
+/// Reports the running version against the latest release. Never `FAIL`:
+/// an offline machine or a private repo must not change doctor's exit code.
+fn check_version(report: &mut Report) {
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    let getenv = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let config_flag = paths::config_file()
+        .ok()
+        .and_then(|p| Config::load(&p, &getenv).ok())
+        .is_none_or(|c| c.update_check);
+    if !baton_core::update::enabled(config_flag, &|k| std::env::var(k).ok()) {
+        report.emit(
+            Level::Pass,
+            format!("version: {VERSION} (update check disabled)"),
+        );
+        return;
+    }
+    let recently_failed = paths::update_cache_path()
+        .ok()
+        .and_then(|p| baton_core::update::Cache::load(&p))
+        .is_some_and(|c| !c.ok && c.is_fresh(now_secs()));
+    let result = if recently_failed {
+        Err("last check failed".to_owned())
+    } else {
+        update::check(false, update::CLI_TIMEOUT)
+    };
+    match result {
+        Ok(checked) => match checked.outcome {
+            Outcome::UpToDate => {
+                report.emit(Level::Pass, format!("version: {VERSION} (latest)"));
+            }
+            Outcome::Newer { latest } => {
+                let url = checked.html_url.as_deref().unwrap_or("");
+                report.emit(
+                    Level::Warn,
+                    format!(
+                        "version: {} is available (you have {VERSION}): {}",
+                        sanitize(&latest),
+                        sanitize(url)
+                    ),
+                );
+            }
+            Outcome::Unknown(why) => report.emit(
+                Level::Warn,
+                format!("version: could not check for updates ({})", sanitize(&why)),
+            ),
+        },
+        Err(why) => report.emit(
+            Level::Warn,
+            format!("version: could not check for updates ({})", sanitize(&why)),
+        ),
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]
