@@ -152,6 +152,10 @@ fn tui_shows_notice_from_fresh_cache_without_connecting() -> Result<()> {
             r#"{{"checked_at":{now},"latest":"v99.0.0","html_url":null,"etag":null,"ok":true}}"#
         ),
     )?;
+    std::fs::set_permissions(
+        env.cache_path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )?;
     let mut d = env.tui()?;
     wait(&d, "v99.0.0 available")?;
     d.send(b"q")?;
@@ -230,5 +234,55 @@ fn disabled_tui_does_not_connect() -> Result<()> {
     assert!(!env.cache_path().exists());
     d.send(b"q")?;
     d.wait_exit(Duration::from_secs(5))?;
+    Ok(())
+}
+
+#[test]
+fn tui_ignores_group_writable_cache_file() -> Result<()> {
+    let server = ReleaseServer::start(Reply::status(500))?;
+    let env = Env::new(server.url())?;
+    let state = env.dir.path().join("state");
+    std::fs::create_dir_all(&state)?;
+    std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    std::fs::write(
+        env.cache_path(),
+        format!(
+            r#"{{"checked_at":{now},"latest":"v99.0.0","html_url":null,"etag":null,"ok":true}}"#
+        ),
+    )?;
+    std::fs::set_permissions(
+        env.cache_path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o664),
+    )?;
+    let mut d = env.tui()?;
+    wait(&d, "Projects")?;
+    std::thread::sleep(Duration::from_millis(500));
+    let screen = d.screen_text().to_lowercase();
+    assert!(!screen.contains("99.0.0"), "{screen}");
+    assert!(server.connections() >= 1, "cache must not be trusted");
+    d.send(b"q")?;
+    d.wait_exit(Duration::from_secs(5))?;
+    Ok(())
+}
+
+#[test]
+fn broken_config_disables_automatic_checks() -> Result<()> {
+    let server = ReleaseServer::start(Reply::ok(release("v99.0.0")))?;
+    let env = Env::new(server.url())?;
+    let cfg = env.dir.path().join("config.toml");
+    let text = std::fs::read_to_string(&cfg)?;
+    std::fs::write(
+        &cfg,
+        format!("update_check = false\nupdate_chek = true\n{text}"),
+    )?;
+    let mut d = env.tui()?;
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(server.connections(), 0);
+    assert!(!env.cache_path().exists());
+    let _ = d.send(b"q");
+    let _ = d.wait_exit(Duration::from_secs(5));
     Ok(())
 }

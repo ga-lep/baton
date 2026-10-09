@@ -293,3 +293,97 @@ fn hostile_server_data_never_reaches_the_terminal() -> Result<()> {
     assert!(!text.contains('\x1b') && !text.contains('\x07'), "{text:?}");
     Ok(())
 }
+
+/// Plants a fresh, successful cache for `v99.0.0` with an ETag, in a state
+/// dir with the given mode.
+fn plant_cache(env: &Env, dir_mode: u32, ok: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let state = env.dir.path().join("state");
+    std::fs::create_dir_all(&state)?;
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(dir_mode))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let json = serde_json::json!({
+        "checked_at": now, "latest": ok.then_some("v99.0.0"),
+        "html_url": URL, "etag": "\"planted\"", "ok": ok,
+    });
+    std::fs::write(env.cache_path(), serde_json::to_vec(&json)?)?;
+    std::fs::set_permissions(env.cache_path(), std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[test]
+fn planted_cache_in_untrusted_state_dir_is_ignored() -> Result<()> {
+    for mode in [0o755, 0o770, 0o707] {
+        let env = Env::new()?;
+        plant_cache(&env, mode, true)?;
+        let srv = ReleaseServer::start(Reply::status(304))?;
+        let out = env.run(&srv.url(), &["--check"], &[])?;
+        assert_eq!(out.status.code(), Some(1), "{mode:o}: {}", stdout(&out));
+        assert!(
+            !stdout(&out).contains("99.0.0"),
+            "{mode:o}: {}",
+            stdout(&out)
+        );
+        let reqs = srv.requests();
+        assert!(
+            !reqs[0].iter().any(|(k, _)| k == "if-none-match"),
+            "{mode:o}: planted etag was sent"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn newer_without_url_has_no_dangling_separator() -> Result<()> {
+    let env = Env::new()?;
+    let srv = ReleaseServer::start(Reply::ok(r#"{"tag_name":"v99.0.0"}"#))?;
+    let out = env.run(&srv.url(), &["--check"], &[])?;
+    assert_eq!(
+        stdout(&out),
+        format!("baton 99.0.0 is available (you have {VER})\n")
+    );
+    Ok(())
+}
+
+#[test]
+fn foreign_github_url_is_dropped() -> Result<()> {
+    let env = Env::new()?;
+    let body =
+        r#"{"tag_name":"v99.0.0","html_url":"https://github.com/evil/baton/releases/tag/v99.0.0"}"#;
+    let srv = ReleaseServer::start(Reply::ok(body))?;
+    let out = env.run(&srv.url(), &["--check"], &[])?;
+    assert_eq!(
+        stdout(&out),
+        format!("baton 99.0.0 is available (you have {VER})\n")
+    );
+    Ok(())
+}
+
+#[test]
+fn loopback_redirects_are_not_followed() -> Result<()> {
+    let env = Env::new()?;
+    let target = ReleaseServer::start(Reply::ok(release("v99.0.0")))?;
+    let srv = ReleaseServer::start(Reply::redirect(target.url()))?;
+    let out = env.run(&srv.url(), &["--check"], &[])?;
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert_eq!(target.connections(), 0);
+    Ok(())
+}
+
+#[test]
+fn network_derived_reasons_are_sanitised() -> Result<()> {
+    let env = Env::new()?;
+    // A redirect whose Location carries a C1 control byte surfaces in the error text.
+    let target = format!("http://127.0.0.1:1/\u{85}\u{202e}{}", "a".repeat(2000));
+    let srv = ReleaseServer::start(Reply::redirect(target))?;
+    let out = env.run(&srv.url(), &["--check"], &[])?;
+    let text = stdout(&out);
+    assert!(text.len() < 400, "{} bytes", text.len());
+    assert!(
+        !text.chars().any(|c| c.is_control() && c != '\n'),
+        "{text:?}"
+    );
+    Ok(())
+}

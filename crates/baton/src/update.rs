@@ -2,7 +2,7 @@
 //! cache-aware entry point built on `baton_core::update`.
 
 use baton_core::paths;
-use baton_core::update::{Cache, Outcome, compare, parse_release};
+use baton_core::update::{Cache, Outcome, compare, parse_release, printable_capped};
 use std::io::Read as _;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -10,6 +10,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const DEFAULT_URL: &str = "https://api.github.com/repos/ga-lep/baton/releases/latest";
 /// Largest response body accepted.
 const MAX_BODY: u64 = 1024 * 1024;
+
+/// Reason reported when a fresh cached check had failed (no retry yet).
+const LAST_CHECK_FAILED: &str = "last check failed";
+/// Longest user-visible failure reason, in characters.
+const MAX_REASON: usize = 160;
 
 /// Timeout for the background check of the TUI.
 pub const TUI_TIMEOUT: Duration = Duration::from_secs(2);
@@ -50,7 +55,7 @@ pub fn fetch(url: &str, timeout: Duration, etag: Option<&str>) -> Result<Fetched
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .https_only(https_only(url))
-        .max_redirects(3)
+        .max_redirects(if https_only(url) { 3 } else { 0 })
         .http_status_as_error(false)
         .build()
         .into();
@@ -126,17 +131,22 @@ fn from_cache(cache: &Cache) -> Result<Checked, String> {
 /// # Errors
 /// A one-line, user-readable reason.
 pub fn check(force: bool, timeout: Duration) -> Result<Checked, String> {
+    check_inner(force, timeout).map_err(|e| printable_capped(&e, MAX_REASON))
+}
+
+fn check_inner(force: bool, timeout: Duration) -> Result<Checked, String> {
     let path = paths::update_cache_path().map_err(|e| format!("no state dir: {e}"))?;
     // Create/validate the state dir like the daemon does; if it is unusable
     // the cache is simply not written.
     let dir_ok = paths::ensure_state_dir().is_ok();
     let now = now_secs();
-    let cached = Cache::load(&path);
+    // The cache is only trusted from a private directory we own.
+    let cached = if dir_ok { Cache::load(&path) } else { None };
     if !force && let Some(c) = cached.as_ref().filter(|c| c.is_fresh(now)) {
         return if c.ok {
             from_cache(c)
         } else {
-            Err("a recent check failed; retrying later".into())
+            Err(LAST_CHECK_FAILED.into())
         };
     }
     let url = std::env::var("BATON_UPDATE_URL")
@@ -214,7 +224,12 @@ pub fn startup() -> Startup {
     let Ok(path) = paths::update_cache_path() else {
         return none;
     };
-    let cached = Cache::load(&path);
+    // The cache is only trusted from a private directory we own; without
+    // one, the background check runs (and will not write).
+    let cached = paths::ensure_state_dir()
+        .is_ok()
+        .then(|| Cache::load(&path))
+        .flatten();
     let available = cached
         .as_ref()
         .filter(|c| c.ok)
@@ -237,15 +252,26 @@ fn newer(outcome: &Outcome) -> Option<String> {
 /// Runs [`check`] on a detached thread; the receiver yields the newer
 /// version, if any. Errors are only logged: the TUI owns the terminal.
 pub fn spawn_background(timeout: Duration) -> tokio::sync::oneshot::Receiver<Option<String>> {
+    spawn_with(move || match check(false, timeout) {
+        Ok(c) => newer(&c.outcome),
+        Err(e) => {
+            tracing::debug!("update check failed: {e}");
+            None
+        }
+    })
+}
+
+/// Runs `work` on a detached thread and sends its result; a panic in `work`
+/// is contained and reported as `None`. The thread is exempt from the TUI's
+/// terminal-restoring panic hook, which must not fire under the running UI.
+fn spawn_with<F>(work: F) -> tokio::sync::oneshot::Receiver<Option<String>>
+where
+    F: FnOnce() -> Option<String> + Send + 'static,
+{
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        let found = match check(false, timeout) {
-            Ok(c) => newer(&c.outcome),
-            Err(e) => {
-                tracing::debug!("update check failed: {e}");
-                None
-            }
-        };
+        crate::tui::terminal_guard::exempt_current_thread();
+        let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or(None);
         let _ = tx.send(found);
     });
     rx
@@ -254,6 +280,21 @@ pub fn spawn_background(timeout: Duration) -> tokio::sync::oneshot::Receiver<Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panic_in_background_work_yields_none() {
+        let rx = spawn_with(|| panic!("boom"));
+        assert_eq!(rx.blocking_recv().ok(), Some(None));
+        let rx = spawn_with(|| Some("1.2.3".into()));
+        assert_eq!(rx.blocking_recv().ok(), Some(Some("1.2.3".to_owned())));
+    }
+
+    #[test]
+    fn background_thread_is_exempt_from_the_terminal_hook() {
+        let rx = spawn_with(|| Some(crate::tui::terminal_guard::hook_should_restore().to_string()));
+        assert_eq!(rx.blocking_recv().ok(), Some(Some("false".to_owned())));
+        assert!(crate::tui::terminal_guard::hook_should_restore());
+    }
 
     #[test]
     fn https_policy() {

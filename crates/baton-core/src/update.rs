@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read as _, Write as _};
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::Path;
 
 /// Longest accepted release URL.
@@ -15,14 +15,19 @@ const MAX_ETAG: usize = 200;
 const MAX_CACHE_BYTES: u64 = 64 * 1024;
 /// Longest tag echoed in messages.
 const MAX_TAG_SHOWN: usize = 40;
+/// Longest accepted release tag, in bytes.
+const MAX_TAG_BYTES: usize = 64;
+/// The only URL prefix accepted for release links.
+const RELEASES_PREFIX: &str = "https://github.com/ga-lep/baton/releases/";
 
 fn visible_ascii(s: &str) -> bool {
     s.bytes().all(|b| (0x21..=0x7e).contains(&b))
 }
 
-/// Accepts a release URL only if it is a short, printable-ASCII `https://github.com/` URL.
+/// Accepts a release URL only if it is a short, printable-ASCII URL below
+/// this project's `https://github.com/ga-lep/baton/releases/` page.
 pub fn sanitize_url(url: &str) -> Option<String> {
-    (url.starts_with("https://github.com/") && url.len() <= MAX_URL && visible_ascii(url))
+    (url.starts_with(RELEASES_PREFIX) && url.len() <= MAX_URL && visible_ascii(url))
         .then(|| url.to_owned())
 }
 
@@ -31,18 +36,33 @@ pub fn sanitize_etag(etag: &str) -> Option<String> {
     (!etag.is_empty() && etag.len() <= MAX_ETAG && visible_ascii(etag)).then(|| etag.to_owned())
 }
 
-/// Makes untrusted text safe to print: control characters become `?` and
-/// the result is capped in length.
-fn printable(s: &str) -> String {
+/// Whether `c` must never reach a terminal: control characters (C0, DEL,
+/// C1) and invisible or bidirectional-formatting characters.
+pub fn is_unsafe_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        )
+}
+
+/// Makes untrusted text safe to print: unsafe characters (see
+/// [`is_unsafe_char`]) become `?`, and the result is capped at `max`
+/// characters (`...` is appended when cut).
+pub fn printable_capped(s: &str, max: usize) -> String {
     let mut out: String = s
         .chars()
-        .take(MAX_TAG_SHOWN)
-        .map(|c| if c.is_control() { '?' } else { c })
+        .take(max)
+        .map(|c| if is_unsafe_char(c) { '?' } else { c })
         .collect();
-    if s.chars().count() > MAX_TAG_SHOWN {
+    if s.chars().nth(max).is_some() {
         out.push_str("...");
     }
     out
+}
+
+fn printable(s: &str) -> String {
+    printable_capped(s, MAX_TAG_SHOWN)
 }
 
 /// Cache lifetime after a successful check.
@@ -111,6 +131,9 @@ pub struct Release {
 /// If the body is not JSON or lacks `tag_name`.
 pub fn parse_release(body: &str) -> Result<Release, serde_json::Error> {
     let mut r: Release = serde_json::from_str(body)?;
+    if r.tag_name.len() > MAX_TAG_BYTES {
+        return Err(serde::de::Error::custom("tag_name too long"));
+    }
     r.html_url = r.html_url.as_deref().and_then(sanitize_url);
     Ok(r)
 }
@@ -131,8 +154,13 @@ pub struct Cache {
 }
 
 impl Cache {
-    /// Loads the cache; a missing, empty or corrupt file yields `None`.
+    /// Loads the cache; a missing, empty, corrupt or untrusted file (not
+    /// owned by the current user, or writable by group/other) yields `None`.
     pub fn load(path: &Path) -> Option<Self> {
+        Self::load_for(path, nix::unistd::getuid().as_raw())
+    }
+
+    fn load_for(path: &Path, uid: u32) -> Option<Self> {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
@@ -140,6 +168,10 @@ impl Cache {
             .ok()?;
         let meta = file.metadata().ok()?;
         if !meta.is_file() || meta.len() > MAX_CACHE_BYTES {
+            return None;
+        }
+        // A cache that someone else owns or can write is not trusted.
+        if meta.uid() != uid || meta.mode() & 0o022 != 0 {
             return None;
         }
         let mut text = String::new();
@@ -150,6 +182,9 @@ impl Cache {
             return None;
         }
         let mut c: Self = serde_json::from_str(&text).ok()?;
+        if c.latest.as_ref().is_some_and(|t| t.len() > MAX_TAG_BYTES) {
+            return None;
+        }
         c.html_url = c.html_url.as_deref().and_then(sanitize_url);
         c.etag = c.etag.as_deref().and_then(sanitize_etag);
         Some(c)
@@ -369,6 +404,7 @@ mod tests {
             ..cache(1, true)
         };
         std::fs::write(&p, serde_json::to_vec(&bad).unwrap()).unwrap();
+        std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
         let c = Cache::load(&p).unwrap();
         assert_eq!((c.html_url, c.etag), (None, None));
     }
@@ -383,6 +419,74 @@ mod tests {
         assert!(!bad.is_fresh(1000 + FAIL_TTL_SECS));
         assert!(!cache(2000, true).is_fresh(1000), "future is stale");
         assert!(!cache(2000, false).is_fresh(1000), "future is stale");
+    }
+
+    #[test]
+    fn url_must_be_the_project_releases_page() {
+        for bad in [
+            "https://github.com/evil/x",
+            "https://github.com/ga-lep/baton/",
+            "https://github.com/ga-lep/baton",
+            "https://github.com/ga-lep/baton-evil/releases/tag/v1",
+            "https://github.com/ga-lep/other/releases/",
+        ] {
+            assert_eq!(sanitize_url(bad), None, "{bad:?}");
+        }
+        let ok = "https://github.com/ga-lep/baton/releases/";
+        assert_eq!(sanitize_url(ok).as_deref(), Some(ok));
+    }
+
+    #[test]
+    fn printable_capped_strips_c1_bidi_and_caps() {
+        let s = printable_capped("a\u{85}b\u{202e}c\u{200b}d\u{2066}e\u{feff}f\x1bg", 100);
+        assert_eq!(s, "a?b?c?d?e?f?g");
+        let long = printable_capped(&"z".repeat(500), 50);
+        assert_eq!(long, format!("{}...", "z".repeat(50)));
+    }
+
+    #[test]
+    fn unknown_message_strips_format_characters() {
+        let Outcome::Unknown(m) = compare("0.2.0", "v\u{202e}1\u{200b}") else {
+            panic!("expected unknown")
+        };
+        assert!(!m.contains('\u{202e}') && !m.contains('\u{200b}'), "{m:?}");
+    }
+
+    #[test]
+    fn long_tags_are_rejected() {
+        let ok = format!("v1.0.0-{}", "a".repeat(57)); // 64 bytes
+        assert_eq!(ok.len(), 64);
+        let body = |t: &str| format!(r#"{{"tag_name":"{t}"}}"#);
+        assert!(parse_release(&body(&ok)).is_ok());
+        assert!(parse_release(&body(&format!("{ok}a"))).is_err());
+
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("c.json");
+        for (tag, loads) in [(ok.clone(), true), (format!("{ok}a"), false)] {
+            let c = Cache {
+                latest: Some(tag),
+                ..cache(1, true)
+            };
+            c.store(&p).unwrap();
+            assert_eq!(Cache::load(&p).is_some(), loads);
+        }
+    }
+
+    #[test]
+    fn load_rejects_group_writable_and_foreign_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("c.json");
+        cache(1, true).store(&p).unwrap();
+        assert!(Cache::load(&p).is_some());
+        let uid = nix::unistd::getuid().as_raw();
+        assert!(Cache::load_for(&p, uid + 1).is_none(), "foreign owner");
+        for mode in [0o620, 0o602, 0o666] {
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(Cache::load(&p).is_none(), "{mode:o}");
+        }
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(Cache::load(&p).is_some(), "readable by others is fine");
     }
 
     fn env<'a>(v: Option<&'a str>) -> impl Fn(&str) -> Option<String> + 'a {

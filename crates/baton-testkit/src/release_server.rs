@@ -14,6 +14,8 @@ pub struct Reply {
     pub body: String,
     /// `ETag` header, when set.
     pub etag: Option<String>,
+    /// `Location` header, when set (for redirects).
+    pub location: Option<String>,
     /// Pause before answering (a very long delay emulates a hung server).
     pub delay: Duration,
 }
@@ -25,6 +27,7 @@ impl Reply {
             status: 200,
             body: body.into(),
             etag: None,
+            location: None,
             delay: Duration::ZERO,
         }
     }
@@ -34,6 +37,14 @@ impl Reply {
         Self {
             status,
             ..Self::ok("")
+        }
+    }
+
+    /// A `302` redirect to `location`.
+    pub fn redirect(location: impl Into<String>) -> Self {
+        Self {
+            location: Some(location.into()),
+            ..Self::status(302)
         }
     }
 
@@ -125,9 +136,13 @@ fn serve(stream: TcpStream, reply: &Reply, state: &Mutex<Shared>) -> std::io::Re
         .etag
         .as_ref()
         .map_or(String::new(), |e| format!("ETag: {e}\r\n"));
+    let location = reply
+        .location
+        .as_ref()
+        .map_or(String::new(), |l| format!("Location: {l}\r\n"));
     write!(
         out,
-        "HTTP/1.1 {} X\r\nContent-Type: application/json\r\n{etag}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {} X\r\nContent-Type: application/json\r\n{etag}{location}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
         reply.status,
         reply.body.len(),
         reply.body

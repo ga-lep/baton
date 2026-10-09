@@ -14,19 +14,25 @@ pub fn render(checked: &Checked) -> String {
     match &checked.outcome {
         Outcome::UpToDate => format!("baton {VERSION} is up to date"),
         Outcome::Newer { latest } => {
-            let url = checked.html_url.as_deref().unwrap_or("");
-            format!("baton {latest} is available (you have {VERSION}): {url}")
+            let url = checked
+                .html_url
+                .as_deref()
+                .map_or(String::new(), |u| format!(": {u}"));
+            format!("baton {latest} is available (you have {VERSION}){url}")
         }
         Outcome::Unknown(why) => format!("could not check for updates: {why}"),
     }
 }
 
+/// Whether the config allows automatic checks. A missing config file means
+/// yes; a config that exists but cannot be loaded means no, so a typo never
+/// turns an opt-out into an opt-in.
 pub(crate) fn config_flag() -> bool {
     let getenv = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     paths::config_file()
         .ok()
         .and_then(|p| Config::load(&p, &getenv).ok())
-        .is_none_or(|c| c.update_check)
+        .is_some_and(|c| c.update_check)
 }
 
 /// Runs `baton version`; with `check`, queries GitHub and exits 1 on failure.

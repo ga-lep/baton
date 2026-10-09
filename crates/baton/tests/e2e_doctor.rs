@@ -67,10 +67,9 @@ impl Env {
         let state = self.dir.path().join("state");
         std::fs::create_dir_all(&state)?;
         std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
-        std::fs::write(
-            self.dir.path().join("state/update-check.json"),
-            serde_json::to_vec(&json)?,
-        )?;
+        let file = self.dir.path().join("state/update-check.json");
+        std::fs::write(&file, serde_json::to_vec(&json)?)?;
+        std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
         Ok(())
     }
 
@@ -297,5 +296,34 @@ fn version_line_follows_notify_line() -> Result<()> {
     let notify = text.find(" notify: ").expect("notify line");
     let version = text.find("version: 0").expect("version line");
     assert!(notify < version, "{text}");
+    Ok(())
+}
+
+#[test]
+fn planted_cache_in_untrusted_state_dir_is_ignored() -> Result<()> {
+    for (ok, latest) in [(true, Some("v99.0.0")), (false, None)] {
+        let env = Env::new("")?;
+        env.write_cache(60, ok, latest)?;
+        std::fs::set_permissions(
+            env.dir.path().join("state"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )?;
+        let srv = ReleaseServer::start(Reply::ok(r#"{"tag_name":"v1.0.0"}"#))?;
+        let out = env.doctor_with(
+            &["--no-probe"],
+            &[
+                ("BATON_NO_UPDATE_CHECK", ""),
+                ("BATON_UPDATE_URL", &srv.url()),
+            ],
+        )?;
+        let lines = version_lines(&out);
+        assert_eq!(srv.connections(), 1, "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .all(|l| !l.contains("99.0.0") && !l.contains("last check failed")),
+            "{lines:?}"
+        );
+    }
     Ok(())
 }
