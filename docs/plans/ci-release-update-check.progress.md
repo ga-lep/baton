@@ -6,3 +6,4 @@ Task 2: started
 Task 2: complete (d6dad1a..6d00b18, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/ci-release-update-check.evidence/task-2.md
   notes: TDD not followed for update.rs (tests written with the code; config key was test-first). Security Medium: Cache::store follows symlinks / predictable pid temp name / no 0600 / skips paths::ensure_private_dir / leaves temp on failure; release tag_name, html_url, etag and cache contents are not sanitized for terminal display (build release URL locally, reject control chars, Debug-format tag in Unknown). Security Low: unbounded reads in Cache::load (cap size); network caller must cap body; pre-releases count as Newer (fine with /releases/latest). Review: temp-file cleanup on failure, per-call temp suffix, tuple .0/.1 readability. Evidence: "yes" error shows the key only in the caret snippet.
+Task 3: started
