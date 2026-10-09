@@ -4,18 +4,20 @@
 //! unit-testable.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use baton_core::attention;
+use baton_core::keymap::{FocusAction, Keymap, NormalAction};
 use baton_proto::{ClientMsg, DaemonMsg, MAX_INPUT, SessionId, SessionInfo, Status};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
 use ratatui::layout::Rect;
 
+use super::keys;
 use super::mirror::Mirror;
 use super::render_pacer::RenderPacer;
 use super::scrollback::{Loading, PAGE, Scroll, View};
 use super::sidebar::{self, Cursor, Row};
-use crate::spike::{KeyAction, Layout, Mode, classify_key, contains, layout};
+use crate::spike::{Layout, Mode, contains, layout};
 use crate::term::encode::{encode_focus, encode_key, encode_mouse, encode_paste};
 use crate::term::screen::Screen;
 
@@ -28,6 +30,8 @@ pub enum Overlay {
     VersionMismatch { daemon: u32 },
     /// The daemon connection is gone.
     Disconnected,
+    /// The key binding overview (`?`).
+    Help,
 }
 
 /// Something the event loop must do on behalf of the reducer.
@@ -41,7 +45,17 @@ pub enum Effect {
     Reconnect,
     /// Stop the running daemon, start a new one and attach.
     RestartDaemon,
+    /// Open `path` with the editor command `template`.
+    OpenEditor {
+        /// The `editor` config value (`{path}` is the placeholder).
+        template: String,
+        /// The repo directory.
+        path: String,
+    },
 }
+
+/// How long an editor spawn error stays in the bottom bar.
+pub const FLASH_FOR: Duration = Duration::from_secs(5);
 
 /// Hint shown when scrolling is refused on the alternate screen.
 pub const ALT_SCREEN_HINT: &str = "app manages its own scrolling (mouse wheel)";
@@ -92,6 +106,11 @@ pub struct App {
     terminal_focused: bool,
     /// The last `ClientView` sent, to send only changes.
     sent_view: Option<(Option<SessionId>, bool)>,
+    keymap: Keymap,
+    /// The `editor` command template.
+    editor: String,
+    /// A message for the bottom bar and the instant it expires.
+    flash: Option<(String, Instant)>,
 }
 
 fn is_closed(s: &SessionInfo) -> bool {
@@ -139,6 +158,58 @@ impl App {
             confirm: None,
             terminal_focused: true,
             sent_view: None,
+            keymap: Keymap::default(),
+            editor: baton_core::config::Config::default().editor,
+            flash: None,
+        }
+    }
+
+    /// Replaces the key bindings (read from the config on attach).
+    pub fn set_keymap(&mut self, keymap: Keymap) {
+        self.keymap = keymap;
+        self.pacer.mark_dirty();
+    }
+
+    /// Sets the `editor` command template.
+    pub fn set_editor(&mut self, template: String) {
+        self.editor = template;
+    }
+
+    /// The active key bindings.
+    pub fn keymap(&self) -> &Keymap {
+        &self.keymap
+    }
+
+    /// Shows an editor spawn error in the bottom bar for [`FLASH_FOR`].
+    pub fn on_editor_error(&mut self, message: String, now: Instant) {
+        self.flash = Some((message, now + FLASH_FOR));
+        self.pacer.mark_dirty();
+    }
+
+    /// The message to show in the bottom bar, if any.
+    pub fn flash(&self) -> Option<&str> {
+        self.flash.as_ref().map(|(m, _)| m.as_str())
+    }
+
+    /// Drops an expired bottom-bar message; `true` if one was dropped.
+    pub fn expire(&mut self, now: Instant) -> bool {
+        if self.flash.as_ref().is_some_and(|(_, until)| now >= *until) {
+            self.flash = None;
+            self.pacer.mark_dirty();
+            return true;
+        }
+        false
+    }
+
+    /// How long until the loop must wake up (a render or a message expiring).
+    pub fn next_deadline(&self, now: Instant) -> Option<Duration> {
+        let flash = self
+            .flash
+            .as_ref()
+            .map(|(_, until)| until.saturating_duration_since(now));
+        match (self.pacer.next_deadline(now), flash) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
     }
 
@@ -244,7 +315,10 @@ impl App {
     /// Appends a `ClientView` if the shown session or terminal focus changed
     /// since the last one sent.
     fn sync_view(&mut self, effects: &mut Vec<Effect>) {
-        if self.overlay != Overlay::None {
+        if matches!(
+            self.overlay,
+            Overlay::VersionMismatch { .. } | Overlay::Disconnected
+        ) {
             return; // no usable daemon connection
         }
         let view = (
@@ -373,35 +447,68 @@ impl App {
         vec![Effect::Send(ClientMsg::OpenProject { name })]
     }
 
-    /// Sidebar keys; `None` when `key` is not one of them.
-    fn on_sidebar_key(&mut self, key: &KeyEvent) -> Option<Vec<Effect>> {
-        let plain = key.modifiers == KeyModifiers::NONE;
-        let ctrl = key.modifiers == KeyModifiers::CONTROL;
-        Some(match key.code {
-            KeyCode::Char('j') | KeyCode::Down if plain => self.step(1),
-            KeyCode::Char('k') | KeyCode::Up if plain => self.step(-1),
-            KeyCode::Enter | KeyCode::Char('l') if plain => self.activate(),
-            KeyCode::Char('n') if plain => {
+    /// Runs a normal-mode action.
+    fn run_normal(&mut self, action: NormalAction) -> Vec<Effect> {
+        match action {
+            NormalAction::MoveDown => self.step(1),
+            NormalAction::MoveUp => self.step(-1),
+            NormalAction::Activate => self.activate(),
+            NormalAction::OpenProject => self
+                .cursor_project()
+                .map_or_else(Vec::new, |n| self.open_project(n)),
+            NormalAction::Select(n) => {
+                self.pick(usize::from(n));
+                Vec::new()
+            }
+            NormalAction::NextAttention => {
                 self.next_attention();
                 Vec::new()
             }
-            KeyCode::Char('r') if plain => self.ask_restart(),
-            KeyCode::Char('o') if plain => self
-                .cursor_project()
-                .map_or_else(Vec::new, |n| self.open_project(n)),
-            KeyCode::Char(d @ '1'..='9') if plain => {
-                self.pick(usize::from(d as u8 - b'0'));
+            NormalAction::Restart => self.ask_restart(),
+            NormalAction::Editor => self.open_editor(),
+            NormalAction::ScrollUp => self.scroll_by(Scrolling::HalfUp),
+            NormalAction::ScrollDown => self.scroll_by(Scrolling::HalfDown),
+            NormalAction::PageUp => self.scroll_by(Scrolling::PageUp),
+            NormalAction::PageDown => self.scroll_by(Scrolling::PageDown),
+            NormalAction::Live => self.scroll_by(Scrolling::Live),
+            NormalAction::Help => {
+                self.overlay = Overlay::Help;
                 Vec::new()
             }
-            KeyCode::Char('u') if ctrl => self.scroll_by(Scrolling::HalfUp),
-            KeyCode::Char('d') if ctrl => self.scroll_by(Scrolling::HalfDown),
-            KeyCode::PageUp => self.scroll_by(Scrolling::PageUp),
-            KeyCode::PageDown => self.scroll_by(Scrolling::PageDown),
-            KeyCode::Char('G') if key.modifiers == KeyModifiers::SHIFT || plain => {
-                self.scroll_by(Scrolling::Live)
-            }
-            _ => return None,
-        })
+            NormalAction::Quit => vec![Effect::Quit],
+        }
+    }
+
+    /// Runs a focus-mode action.
+    fn run_focus(&mut self, action: FocusAction) {
+        match action {
+            FocusAction::Unfocus => self.mode = Mode::Normal,
+            FocusAction::NextAttention => self.next_attention(),
+            FocusAction::Session(n) => self.pick(usize::from(n)),
+        }
+    }
+
+    /// `e`: open the shown session's repo in the editor.
+    fn open_editor(&self) -> Vec<Effect> {
+        match self.selected_session() {
+            Some(s) => vec![Effect::OpenEditor {
+                template: self.editor.clone(),
+                path: s.repo.clone(),
+            }],
+            None => Vec::new(),
+        }
+    }
+
+    /// Keys while the help overlay is up: `?`, its remapped keys and Esc close
+    /// it; everything else is swallowed.
+    fn on_help_key(&mut self, key: &KeyEvent) {
+        let spec = keys::from_event(key);
+        let closes = key.code == KeyCode::Esc
+            || key.code == KeyCode::Char('?')
+            || spec.is_some_and(|s| self.keymap.normal_action(&s) == Some(NormalAction::Help));
+        if closes {
+            self.overlay = Overlay::None;
+        }
     }
 
     /// `r`: restart the shown session, after asking while it is working or
@@ -673,6 +780,10 @@ impl App {
                     _ => Vec::new(),
                 };
             }
+            Overlay::Help => {
+                self.on_help_key(key);
+                return Vec::new();
+            }
             Overlay::None => {}
         }
         // The answer to a pending question is consumed by the question.
@@ -682,32 +793,16 @@ impl App {
                 _ => Vec::new(),
             };
         }
-        if key.modifiers == KeyModifiers::ALT {
-            match key.code {
-                KeyCode::Char('n') => {
-                    self.next_attention();
+        let spec = keys::from_event(key);
+        match self.mode {
+            Mode::Normal => spec
+                .and_then(|s| self.keymap.normal_action(&s))
+                .map_or_else(Vec::new, |a| self.run_normal(a)),
+            Mode::Focus => {
+                if let Some(action) = spec.and_then(|s| self.keymap.focus_action(&s)) {
+                    self.run_focus(action);
                     return Vec::new();
                 }
-                KeyCode::Char(d @ '1'..='9') if self.mode == Mode::Focus => {
-                    self.pick(usize::from(d as u8 - b'0'));
-                    return Vec::new();
-                }
-                _ => {}
-            }
-        }
-        if self.mode == Mode::Normal
-            && let Some(effects) = self.on_sidebar_key(key)
-        {
-            return effects;
-        }
-        match classify_key(self.mode, key) {
-            KeyAction::ToNormal => {
-                self.mode = Mode::Normal;
-                Vec::new()
-            }
-            KeyAction::ToFocus => Vec::new(),
-            KeyAction::Quit => vec![Effect::Quit],
-            KeyAction::Forward => {
                 // Typing returns to the live view, as in a terminal.
                 if let Some(id) = self.selected_session().map(|s| s.id.clone()) {
                     self.scroll.remove(&id);
@@ -715,7 +810,6 @@ impl App {
                 let modes = self.selected_modes();
                 self.to_session(|_| encode_key(key, &modes).unwrap_or_default())
             }
-            KeyAction::Ignore => Vec::new(),
         }
     }
 

@@ -1,6 +1,6 @@
 use super::*;
 use baton_proto::Status;
-use crossterm::event::{MouseButton, MouseEventKind};
+use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
 
 const HOST: Rect = Rect::new(0, 0, 120, 40);
 
@@ -854,4 +854,139 @@ fn usage_updates_replace_the_sessions_usage_and_none_means_n_a() {
         Instant::now(),
     );
     assert_eq!(by_id(&app, "x//b"), None);
+}
+
+fn keymap(entries: &[(&str, &str, &str)]) -> baton_core::keymap::Keymap {
+    let mut o = baton_core::keymap::Overrides::new();
+    for (mode, action, key) in entries {
+        o.entry((*mode).to_owned())
+            .or_default()
+            .insert((*action).to_owned(), vec![(*key).to_owned()]);
+    }
+    baton_core::keymap::Keymap::from_overrides(&o).expect("valid keymap")
+}
+
+fn editor_runs(effects: &[Effect]) -> Vec<(String, String)> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::OpenEditor { template, path } => Some((template.clone(), path.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn remapped_normal_keys_replace_the_defaults() {
+    let mut app = three(Status::Idle, Status::Permission, Status::Idle);
+    app.set_keymap(keymap(&[("normal", "next_attention", "x")]));
+    app.on_event(ch('n'), HOST);
+    assert_eq!(shown(&app), Some("x//a"), "n is no longer bound");
+    app.on_event(ch('x'), HOST);
+    assert_eq!(shown(&app), Some("x//b"));
+}
+
+#[test]
+fn remapped_unfocus_leaves_focus_and_the_old_key_is_data() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.set_keymap(keymap(&[("focus", "unfocus", "ctrl-g")]));
+    app.on_event(key(KeyCode::Enter), HOST);
+    assert_eq!(app.mode, Mode::Focus);
+    let fx = app.on_event(ctrl('\\'), HOST);
+    assert_eq!(app.mode, Mode::Focus);
+    assert_eq!(sent(&fx), vec![(sid("x//a"), vec![0x1c])]);
+    let fx = app.on_event(ctrl('g'), HOST);
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(sent(&fx).is_empty(), "{fx:?}");
+}
+
+#[test]
+fn remapped_focus_session_keys_switch_sessions() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.set_keymap(keymap(&[("focus", "session_2", "ctrl-b")]));
+    app.on_event(key(KeyCode::Enter), HOST);
+    app.on_event(ctrl('b'), HOST);
+    assert_eq!(shown(&app), Some("x//b"));
+    assert_eq!(app.mode, Mode::Focus);
+}
+
+#[test]
+fn e_opens_the_shown_sessions_repo_in_the_editor() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.set_editor("code {path}".into());
+    let fx = app.on_event(ch('e'), HOST);
+    assert_eq!(
+        editor_runs(&fx),
+        [("code {path}".to_owned(), "/r".to_owned())]
+    );
+    // Nothing shown, nothing to open.
+    let mut empty = App::new(HOST);
+    assert!(editor_runs(&empty.on_event(ch('e'), HOST)).is_empty());
+    // `e` is data in focus mode.
+    app.on_event(key(KeyCode::Enter), HOST);
+    let fx = app.on_event(ch('e'), HOST);
+    assert!(editor_runs(&fx).is_empty());
+    assert_eq!(sent(&fx), vec![(sid("x//a"), b"e".to_vec())]);
+}
+
+#[test]
+fn editor_errors_show_for_five_seconds() {
+    use std::time::Duration;
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    let t0 = Instant::now();
+    assert!(app.next_deadline(t0).is_some(), "initial render is pending");
+    app.pacer.rendered(t0);
+    assert_eq!(app.next_deadline(t0), None);
+    app.on_editor_error("cannot run nope: not found".into(), t0);
+    assert_eq!(app.flash(), Some("cannot run nope: not found"));
+    assert!(
+        app.pacer.should_render(t0 + Duration::from_millis(20)),
+        "shown at once"
+    );
+    app.pacer.rendered(t0);
+    assert_eq!(app.next_deadline(t0), Some(Duration::from_secs(5)));
+    assert!(!app.expire(t0 + Duration::from_millis(4999)));
+    assert_eq!(app.flash(), Some("cannot run nope: not found"));
+    assert!(app.expire(t0 + Duration::from_secs(5)));
+    assert_eq!(app.flash(), None);
+    assert!(
+        app.pacer.should_render(t0 + Duration::from_secs(5)),
+        "redraw to clear it"
+    );
+}
+
+#[test]
+fn help_overlay_opens_with_question_mark_and_closes_with_question_mark_or_esc() {
+    for closer in [ch('?'), key(KeyCode::Esc)] {
+        let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+        app.on_event(ch('?'), HOST);
+        assert_eq!(app.overlay, Overlay::Help);
+        // Other keys are swallowed: q does not quit, j does not move.
+        assert!(app.on_event(ch('q'), HOST).is_empty());
+        app.on_event(ch('j'), HOST);
+        assert_eq!(app.overlay, Overlay::Help);
+        assert_eq!(shown(&app), Some("x//a"));
+        assert!(app.on_event(closer, HOST).is_empty());
+        assert_eq!(app.overlay, Overlay::None);
+    }
+}
+
+#[test]
+fn help_does_not_stop_client_view_updates() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.on_event(ch('?'), HOST);
+    let fx = app.on_event(Event::FocusLost, HOST);
+    assert_eq!(views(&fx), vec![(Some(sid("x//a")), false)]);
+}
+
+#[test]
+fn a_remapped_help_key_opens_and_closes_help() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.set_keymap(keymap(&[("normal", "help", "f1")]));
+    app.on_event(ch('?'), HOST);
+    assert_eq!(app.overlay, Overlay::None);
+    app.on_event(key(KeyCode::F(1)), HOST);
+    assert_eq!(app.overlay, Overlay::Help);
+    app.on_event(key(KeyCode::F(1)), HOST);
+    assert_eq!(app.overlay, Overlay::None);
 }

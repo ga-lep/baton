@@ -1,8 +1,11 @@
 //! Terminal UI: the ratatui client of the daemon.
 
 pub mod app;
+pub mod editor;
 pub mod event_loop;
+pub mod help;
 pub mod info_panel;
+pub mod keys;
 pub mod labels;
 pub mod mirror;
 pub mod render_pacer;

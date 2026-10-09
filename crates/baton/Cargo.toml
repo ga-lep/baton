@@ -30,6 +30,7 @@ tracing-appender = "0.2"
 tracing-subscriber = "0.3"
 notify-rust = "4"
 uuid.workspace = true
+shell-words = "1.1.1"
 
 [dev-dependencies]
 baton-testkit.workspace = true

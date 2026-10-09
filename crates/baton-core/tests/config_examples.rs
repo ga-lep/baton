@@ -1,6 +1,7 @@
 //! Config parsing against the spec example and error cases.
 
 use baton_core::config::{Config, ConfigError};
+use baton_core::keymap::{FocusAction, NormalAction};
 use std::path::PathBuf;
 
 const SPEC_EXAMPLE: &str = r##"
@@ -80,7 +81,55 @@ fn spec_example_parses_and_resolves() {
     );
     assert_eq!(c.projects[1].sessions[0].profile, "personal");
     assert!(c.pricing.default.is_some());
-    assert_eq!(c.keybindings["focus"]["unfocus"], "ctrl-\\");
+    let ctrl_backslash = "ctrl-\\".parse().expect("key");
+    assert_eq!(
+        c.keybindings.focus_action(&ctrl_backslash),
+        Some(FocusAction::Unfocus)
+    );
+}
+
+#[test]
+fn keybindings_accept_strings_and_lists() {
+    let c = parse(
+        "[keybindings.normal]\nnext_attention = \"x\"\nquit = [\"q\", \"ctrl-c\"]\n\
+         [keybindings.focus]\nunfocus = \"ctrl-g\"\n",
+    )
+    .expect("valid");
+    let k = |s: &str| s.parse().expect("key");
+    assert_eq!(
+        c.keybindings.normal_action(&k("x")),
+        Some(NormalAction::NextAttention)
+    );
+    assert_eq!(c.keybindings.normal_action(&k("n")), None);
+    assert_eq!(
+        c.keybindings.normal_action(&k("ctrl-c")),
+        Some(NormalAction::Quit)
+    );
+    assert_eq!(
+        c.keybindings.focus_action(&k("ctrl-g")),
+        Some(FocusAction::Unfocus)
+    );
+}
+
+#[test]
+fn bad_keybindings_are_config_errors_naming_the_key() {
+    for (text, needle) in [
+        (
+            "[keybindings.normal]\nteleport = \"x\"\n",
+            "keybindings.normal.teleport",
+        ),
+        (
+            "[keybindings.normal]\nquit = \"ctrl-nope\"\n",
+            "keybindings.normal.quit",
+        ),
+        ("[keybindings.normal]\nrestart = \"n\"\n", "bound to both"),
+        ("[keybindings.focus]\nunfocus = \"x\"\n", "swallow typing"),
+        ("[keybindings.focus]\nunfocus = []\n", "no way out"),
+        ("[keybindings.sidebar]\nquit = \"q\"\n", "unknown mode"),
+    ] {
+        let e = parse(text).expect_err(text).to_string();
+        assert!(e.contains(needle), "{text}: {e}");
+    }
 }
 
 #[test]

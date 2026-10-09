@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 
 use super::app::{App, Effect};
 use super::terminal_guard::TerminalGuard;
-use super::{sidebar, ui};
+use super::{editor, sidebar, ui};
 use crate::client::{self, ClientError, Conn};
 
 type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
@@ -65,8 +65,12 @@ fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
     match l {
         Link::Up(c) => {
             app.on_connected();
-            match sidebar::load_project_names() {
-                Ok(names) => app.set_projects(names),
+            match sidebar::load_settings() {
+                Ok(settings) => {
+                    app.set_projects(settings.projects);
+                    app.set_keymap(settings.keymap);
+                    app.set_editor(settings.editor);
+                }
                 Err(e) => app.notice = Some(format!("config: {e}")),
             }
             *conn = Some(c);
@@ -104,6 +108,11 @@ async fn apply(effects: Vec<Effect>, app: &mut App, conn: &mut Option<Conn>) -> 
             Effect::Reconnect => {
                 let l = link(client::ensure_daemon(Role::Tui).await, app.size()).await?;
                 settle(l, app, conn);
+            }
+            Effect::OpenEditor { template, path } => {
+                if let Err(e) = editor::open(&template, &path) {
+                    app.on_editor_error(e.to_string(), Instant::now());
+                }
             }
             Effect::RestartDaemon => {
                 let l = link(client::restart_daemon(Role::Tui).await, app.size()).await?;
@@ -144,7 +153,8 @@ pub async fn run() -> Result<()> {
 async fn drive(app: &mut App, conn: &mut Option<Conn>, terminal: &mut Term) -> Result<()> {
     let mut events = EventStream::new();
     loop {
-        let wait = app.pacer.next_deadline(Instant::now()).unwrap_or(IDLE);
+        app.expire(Instant::now());
+        let wait = app.next_deadline(Instant::now()).unwrap_or(IDLE);
         let effects = tokio::select! {
             ev = events.next() => match ev {
                 Some(Ok(ev)) => app.on_event(ev, host_rect(terminal)?),

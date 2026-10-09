@@ -117,15 +117,29 @@ pub fn rows<'a>(projects: &'a [String], sessions: &'a [SessionInfo]) -> Vec<Row<
     out
 }
 
-/// Project names from the config file, in order.
+/// What the TUI reads from the config file on attach.
+pub struct Settings {
+    /// Project names, in order.
+    pub projects: Vec<String>,
+    /// Key bindings.
+    pub keymap: baton_core::keymap::Keymap,
+    /// The `editor` command template.
+    pub editor: String,
+}
+
+/// Project names, key bindings and editor from the config file.
 ///
 /// # Errors
-/// A message describing why the config could not be read.
-pub fn load_project_names() -> Result<Vec<String>, String> {
+/// A message describing why the config could not be read or is invalid.
+pub fn load_settings() -> Result<Settings, String> {
     let path = paths::config_file().map_err(|e| e.to_string())?;
     let config = Config::load(&path, &|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
         .map_err(|e| e.to_string())?;
-    Ok(config.projects.into_iter().map(|p| p.name).collect())
+    Ok(Settings {
+        projects: config.projects.into_iter().map(|p| p.name).collect(),
+        keymap: config.keybindings,
+        editor: config.editor,
+    })
 }
 
 #[cfg(test)]

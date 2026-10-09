@@ -1,5 +1,6 @@
 //! `config.toml` parsing, validation and resolution into per-session launch specs.
 
+use crate::keymap::{Keymap, KeymapError, Overrides};
 use crate::pricing::Pricing;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -64,6 +65,9 @@ pub enum ConfigError {
         /// Failure description.
         message: String,
     },
+    /// An invalid `[keybindings]` section.
+    #[error("invalid config: {0}")]
+    Keybindings(#[from] KeymapError),
     /// A profile command is empty or has unbalanced quoting.
     #[error("profile \"{profile}\": invalid command: {message}")]
     BadCommand {
@@ -89,7 +93,24 @@ struct RawConfig {
     #[serde(default)]
     pricing: Pricing,
     #[serde(default)]
-    keybindings: BTreeMap<String, BTreeMap<String, String>>,
+    keybindings: BTreeMap<String, BTreeMap<String, KeyList>>,
+}
+
+/// A keybinding value: one key string or a list of them.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum KeyList {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl KeyList {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::One(s) => vec![s],
+            Self::Many(v) => v,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,8 +181,8 @@ pub struct Config {
     pub projects: Vec<Project>,
     /// Price table.
     pub pricing: Pricing,
-    /// Raw keybinding tables by mode, parsed later.
-    pub keybindings: BTreeMap<String, BTreeMap<String, String>>,
+    /// Validated key bindings (defaults with the config's overrides applied).
+    pub keybindings: Keymap,
 }
 
 impl Default for Config {
@@ -174,7 +195,7 @@ impl Default for Config {
             attach_redraw_nudge: true,
             projects: Vec::new(),
             pricing: Pricing::default(),
-            keybindings: BTreeMap::new(),
+            keybindings: Keymap::default(),
         }
     }
 }
@@ -284,6 +305,19 @@ impl Config {
             });
         }
 
+        let overrides: Overrides = raw
+            .keybindings
+            .into_iter()
+            .map(|(mode, actions)| {
+                let actions = actions
+                    .into_iter()
+                    .map(|(action, keys)| (action, keys.into_vec()))
+                    .collect();
+                (mode, actions)
+            })
+            .collect();
+        let keybindings = Keymap::from_overrides(&overrides)?;
+
         Ok(Self {
             editor: raw.editor.unwrap_or(defaults.editor),
             notifications: raw.notifications.unwrap_or(defaults.notifications),
@@ -294,7 +328,7 @@ impl Config {
                 .unwrap_or(defaults.attach_redraw_nudge),
             projects,
             pricing: raw.pricing,
-            keybindings: raw.keybindings,
+            keybindings,
         })
     }
 

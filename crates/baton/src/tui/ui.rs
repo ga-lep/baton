@@ -6,6 +6,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
+use baton_core::keymap::{FocusAction, KeySpec, Keymap, NormalAction};
+
 use super::app::{App, Overlay};
 use super::info_panel;
 use super::labels::{badge, status_label};
@@ -13,11 +15,70 @@ use super::sidebar::repo_name;
 use crate::spike::Mode;
 use crate::term::screen::Screen;
 
-/// Bottom bar text in normal mode (spec section 4).
-pub const NORMAL_BAR: &str =
-    " NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  ? help  q quit";
-/// Bottom bar text in focus mode (spec section 4).
-pub const FOCUS_BAR: &str = " FOCUS │ Ctrl-\\ back  Alt-n next-attention  Alt-1..9 session";
+/// A key as the bottom bar shows it: `Ctrl-u`, `Alt-n`, `⏎`.
+fn label(k: &KeySpec) -> String {
+    let text = k.to_string();
+    let mut out = String::new();
+    let mut rest = text.as_str();
+    for (prefix, shown) in [("ctrl-", "Ctrl-"), ("alt-", "Alt-"), ("shift-", "Shift-")] {
+        if let Some(r) = rest.strip_prefix(prefix) {
+            out.push_str(shown);
+            rest = r;
+        }
+    }
+    out.push_str(if rest == "enter" { "⏎" } else { rest });
+    out
+}
+
+/// Bottom bar text in normal mode (spec section 4), from the live keymap.
+pub fn normal_bar(keymap: &Keymap) -> String {
+    let parts = [
+        (NormalAction::Activate, "focus"),
+        (NormalAction::NextAttention, "next-attention"),
+        (NormalAction::Restart, "restart"),
+        (NormalAction::Editor, "editor"),
+        (NormalAction::OpenProject, "open project"),
+        (NormalAction::Help, "help"),
+        (NormalAction::Quit, "quit"),
+    ];
+    let items: Vec<String> = parts
+        .iter()
+        .filter_map(|(a, what)| {
+            let first = keymap.normal_keys(*a).first()?;
+            Some(format!("{} {what}", label(first)))
+        })
+        .collect();
+    format!(" NORMAL │ {}", items.join("  "))
+}
+
+/// Bottom bar text in focus mode (spec section 4), from the live keymap.
+pub fn focus_bar(keymap: &Keymap) -> String {
+    let mut items = Vec::new();
+    if let Some(k) = keymap.focus_keys(FocusAction::Unfocus).first() {
+        items.push(format!("{} back", label(k)));
+    }
+    if let Some(k) = keymap.focus_keys(FocusAction::NextAttention).first() {
+        items.push(format!("{} next-attention", label(k)));
+    }
+    let first = keymap
+        .focus_keys(FocusAction::Session(1))
+        .first()
+        .map(label);
+    let ninth = keymap
+        .focus_keys(FocusAction::Session(9))
+        .first()
+        .map(label);
+    if let Some(first) = first {
+        let range = match ninth {
+            Some(n) if n.strip_suffix('9') == first.strip_suffix('1') && n.ends_with('9') => {
+                format!("{first}..9")
+            }
+            _ => first,
+        };
+        items.push(format!("{range} session"));
+    }
+    format!(" FOCUS │ {}", items.join("  "))
+}
 /// Shown when the daemon connection is lost.
 pub const DISCONNECTED_TEXT: &str = "daemon disconnected — press r to reconnect, q to quit";
 /// Height of the info panel under the session list: 11 rows, a notice and the border.
@@ -115,14 +176,15 @@ pub fn draw(f: &mut Frame, app: &App) {
         ),
     }
 
+    let mode = if focus { "FOCUS" } else { "NORMAL" };
     let bar = match app.hint {
         _ if app.confirm_prompt().is_some() => {
             format!(" NORMAL │ {}", app.confirm_prompt().unwrap_or_default())
         }
-        Some(hint) if focus => format!(" FOCUS │ {hint}"),
-        Some(hint) => format!(" NORMAL │ {hint}"),
-        None if focus => FOCUS_BAR.to_owned(),
-        None => NORMAL_BAR.to_owned(),
+        _ if app.flash().is_some() => format!(" {mode} │ {}", app.flash().unwrap_or_default()),
+        Some(hint) => format!(" {mode} │ {hint}"),
+        None if focus => focus_bar(app.keymap()),
+        None => normal_bar(app.keymap()),
     };
     f.render_widget(
         Paragraph::new(bar).style(Style::default().add_modifier(Modifier::REVERSED)),
@@ -133,6 +195,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Overlay::None => {}
         Overlay::VersionMismatch { daemon } => modal(f, &mismatch_text(daemon)),
         Overlay::Disconnected => modal(f, DISCONNECTED_TEXT),
+        Overlay::Help => super::help::draw(f, app.keymap()),
     }
 }
 
@@ -212,10 +275,11 @@ mod tests {
 
     #[test]
     fn normal_mode_shows_session_mirror_and_bar() {
-        let out = render(&app_with_session());
+        let app = app_with_session();
+        let out = render(&app);
         assert!(out.contains("1 ● a  running"), "{out}");
         assert!(out.contains("│mirrored text"), "{out}");
-        assert!(out.contains(NORMAL_BAR.trim()), "{out}");
+        assert!(out.contains(normal_bar(app.keymap()).trim()), "{out}");
     }
 
     #[test]
@@ -234,7 +298,7 @@ mod tests {
         );
         let out = render(&app);
         assert!(out.contains("Restart a? [y/N]"), "{out}");
-        assert!(!out.contains(NORMAL_BAR.trim()), "{out}");
+        assert!(!out.contains(normal_bar(app.keymap()).trim()), "{out}");
     }
 
     #[test]
@@ -296,7 +360,62 @@ mod tests {
         let mut app = app_with_session();
         app.mode = Mode::Focus;
         let out = render(&app);
-        assert!(out.contains(FOCUS_BAR.trim()), "{out}");
+        assert!(out.contains(focus_bar(app.keymap()).trim()), "{out}");
+    }
+
+    #[test]
+    fn default_bars_match_the_spec_text() {
+        let k = Keymap::default();
+        assert_eq!(
+            normal_bar(&k),
+            " NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  ? help  q quit"
+        );
+        assert_eq!(
+            focus_bar(&k),
+            " FOCUS │ Ctrl-\\ back  Alt-n next-attention  Alt-1..9 session"
+        );
+    }
+
+    fn press(app: &mut App, c: char) {
+        app.on_event(
+            crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+            Rect::new(0, 0, 120, 40),
+        );
+    }
+
+    #[test]
+    fn bars_and_help_follow_the_remapped_keys() {
+        let mut o = baton_core::keymap::Overrides::new();
+        o.entry("normal".into())
+            .or_default()
+            .insert("next_attention".into(), vec!["x".into()]);
+        o.entry("focus".into())
+            .or_default()
+            .insert("unfocus".into(), vec!["ctrl-g".into()]);
+        let mut app = app_with_session();
+        app.set_keymap(Keymap::from_overrides(&o).expect("valid"));
+        let out = render(&app);
+        assert!(out.contains("x next-attention"), "{out}");
+        press(&mut app, '?');
+        let out = render(&app);
+        assert!(out.contains("next_attention  x"), "{out}");
+        assert!(out.contains("unfocus         ctrl-g"), "{out}");
+        assert!(out.contains("Key bindings"), "{out}");
+        press(&mut app, '?');
+        assert!(!render(&app).contains("Key bindings"));
+        app.mode = Mode::Focus;
+        assert!(render(&app).contains("Ctrl-g back"));
+    }
+
+    #[test]
+    fn editor_errors_replace_the_hint_in_the_bar() {
+        let mut app = app_with_session();
+        app.on_editor_error("cannot run nope: not found".into(), Instant::now());
+        let out = render(&app);
+        assert!(out.contains("NORMAL │ cannot run nope: not found"), "{out}");
     }
 
     #[test]

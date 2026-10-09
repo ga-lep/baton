@@ -3,6 +3,7 @@
 pub mod attention;
 pub mod config;
 pub mod hooks;
+pub mod keymap;
 pub mod launch;
 pub mod notify_rule;
 pub mod paths;
