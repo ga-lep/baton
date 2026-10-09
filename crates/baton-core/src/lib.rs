@@ -12,3 +12,4 @@ pub mod state;
 pub mod status;
 pub mod term;
 pub mod transcript;
+pub mod update;

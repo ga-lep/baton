@@ -87,6 +87,7 @@ struct RawConfig {
     hook_timeout_secs: Option<u64>,
     attach_redraw_nudge: Option<bool>,
     statusline: Option<String>,
+    update_check: Option<bool>,
     #[serde(default)]
     profiles: BTreeMap<String, RawProfile>,
     #[serde(default)]
@@ -181,6 +182,8 @@ pub struct Config {
     /// The user's own status line command, run by `baton statusline` inside
     /// sessions (Baton's status line replaces the one in Claude's settings).
     pub statusline: Option<String>,
+    /// Whether Baton may automatically check for a newer release.
+    pub update_check: bool,
     /// Projects in file order.
     pub projects: Vec<Project>,
     /// Price table.
@@ -198,6 +201,7 @@ impl Default for Config {
             hook_timeout_secs: 20,
             attach_redraw_nudge: true,
             statusline: None,
+            update_check: true,
             projects: Vec::new(),
             pricing: Pricing::default(),
             keybindings: Keymap::default(),
@@ -332,6 +336,7 @@ impl Config {
                 .attach_redraw_nudge
                 .unwrap_or(defaults.attach_redraw_nudge),
             statusline: raw.statusline.filter(|c| !c.trim().is_empty()),
+            update_check: raw.update_check.unwrap_or(defaults.update_check),
             projects,
             pricing: raw.pricing,
             keybindings,
