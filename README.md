@@ -1,6 +1,6 @@
 # Baton
 
-Baton is a lazygit-style terminal UI (Linux only) for running several Claude
+Baton is a terminal UI (Linux only) for running several Claude
 Code sessions side by side. A background daemon owns one interactive `claude`
 session per configured repo, tracks each session's status, keeps sessions
 alive across TUI restarts, shows usage and estimated cost, and sends desktop

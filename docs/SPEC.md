@@ -1,6 +1,6 @@
 # Baton — Spec v1
 
-A lazygit-style TUI that runs and orchestrates several interactive Claude Code sessions in one terminal screen.
+A TUI that runs and orchestrates several interactive Claude Code sessions in one terminal screen.
 
 Status: **draft, pre-implementation** · 2026-10-08
 
