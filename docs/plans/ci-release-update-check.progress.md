@@ -14,3 +14,4 @@ Task 4: started
 Task 4: complete (34cb47d..08c0a56, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/ci-release-update-check.evidence/task-4.md
   notes: Security Medium (carried from Task 3): doctor's recently_failed pre-check and update::check read the cache even when ensure_state_dir rejects the dir; no file owner/mode check in Cache::load. Low: sanitize/printable let Cf (bidi/zero-width) through. Review: recently_failed duplicates update::check's fresh-failed branch; Unknown/Err WARN formatting duplicated; e2e version_lines filter is fragile (profile command also prints "version: ... (profile p)"). User approved a fix round for the carried update-check findings after Task 5's review.
+Task 5: started
