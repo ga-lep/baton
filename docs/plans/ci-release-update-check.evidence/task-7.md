@@ -171,3 +171,104 @@ Status: PENDING (user decision; requires pushing a tag, which was forbidden). No
 
 ## Run 2 verdict
 FAILED (1 criterion): musl static-link assertion in build rejects `static-pie linked`.
+
+---
+
+# Run 3 — commit 714888c (fix for the static-link assertion)
+Commit: 714888c99558d1eccd4a16e1f8a57d8306a9fb3f, pushed to origin/feat/ci-release-update-check (user-approved). No tag, no merge, PR #4 still draft, no `gh release create`.
+Runs (pull_request on PR #4): CI 37947724254, Release 37947724799. Note: GitHub checks out the PR merge ref, so artifact names carry the merge sha `27aa08146698`, not `714888c`.
+
+## CI and release gate green
+Status: PROVEN
+```console
+$ gh run watch 37947724254 --repo ga-lep/baton --exit-status ; echo ci=$?
+ci=0
+$ gh run watch 37947724799 --repo ga-lep/baton --exit-status ; echo rel=$?
+rel=0
+$ gh run view 37947724799 --repo ga-lep/baton
+✓ gate / gate in 1m2s
+✓ verify in 14s
+✓ build (x86_64-unknown-linux-musl) in 1m32s
+✓ build (x86_64-unknown-linux-gnu) in 1m14s
+- publish in 0s
+ARTIFACTS
+baton-x86_64-unknown-linux-musl
+baton-x86_64-unknown-linux-gnu
+```
+Both runs exit 0; gate green; publish skipped (`-`).
+
+## verify prints the version without comparing; publish skipped
+Status: PROVEN
+```console
+$ gh run view --job 113878717631 --repo ga-lep/baton --log   (Check tag against workspace version, trimmed)
+  EVENT: pull_request
+Workspace version: 0.2.0
+Build-only mode: skipping tag comparison.
+```
+
+## musl build leg: smoke tests, package, upload
+Status: PROVEN
+```console
+$ gh run view --job 113878838877 --repo ga-lep/baton --log   (Smoke test / Package / Upload, trimmed)
+Smoke test  baton 0.2.0
+Smoke test  baton 0.2.0 (protocol 6)
+Smoke test  target/x86_64-unknown-linux-musl/release/baton: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, BuildID[sha1]=d08f4cca..., stripped
+Package     -rw-r--r-- 1 runner runner 3255335 Oct  9 14:57 baton-27aa08146698-x86_64-unknown-linux-musl.tar.gz
+Package     -rw-r--r-- 1 runner runner     118 Oct  9 14:57 baton-27aa08146698-x86_64-unknown-linux-musl.tar.gz.sha256
+Upload      name: baton-x86_64-unknown-linux-musl
+Upload      With the provided path, there will be 2 files uploaded
+Upload      Artifact baton-x86_64-unknown-linux-musl successfully finalized. Artifact ID 11624817575
+```
+The step script (`set -euo pipefail`) compares `--version` to `baton $VERSION` (VERSION=0.2.0), runs `BATON_NO_UPDATE_CHECK=1 baton version`, then the widened `file` grep (`statically linked|static-pie linked`) and the readelf INTERP/NEEDED checks; all passed, so Package and Upload ran. The earlier failure (`static-pie linked` rejected) is resolved.
+
+## gnu leg still passes
+Status: PROVEN
+```console
+$ gh run view --job 113878839281 --repo ga-lep/baton --log   (trimmed)
+Smoke test  baton 0.2.0
+Smoke test  baton 0.2.0 (protocol 6)
+Upload      name: baton-x86_64-unknown-linux-gnu
+```
+
+## Downloaded artifacts
+Status: PROVEN
+```console
+$ gh run download 37947724799 --repo ga-lep/baton -D $D/art ; find $D/art -type f
+art/baton-x86_64-unknown-linux-musl/baton-27aa08146698-x86_64-unknown-linux-musl.tar.gz
+art/baton-x86_64-unknown-linux-musl/baton-27aa08146698-x86_64-unknown-linux-musl.tar.gz.sha256
+art/baton-x86_64-unknown-linux-gnu/baton-27aa08146698-x86_64-unknown-linux-gnu.tar.gz.sha256
+art/baton-x86_64-unknown-linux-gnu/baton-27aa08146698-x86_64-unknown-linux-gnu.tar.gz
+$ sha256sum -c *.sha256 ; tar tzf *.tar.gz     (per target dir)
+baton-27aa08146698-x86_64-unknown-linux-musl.tar.gz: OK
+baton-27aa08146698-x86_64-unknown-linux-musl/
+baton-27aa08146698-x86_64-unknown-linux-musl/baton
+baton-27aa08146698-x86_64-unknown-linux-musl/LICENSE
+baton-27aa08146698-x86_64-unknown-linux-musl/README.md
+baton-27aa08146698-x86_64-unknown-linux-gnu.tar.gz: OK
+baton-27aa08146698-x86_64-unknown-linux-gnu/
+baton-27aa08146698-x86_64-unknown-linux-gnu/baton
+baton-27aa08146698-x86_64-unknown-linux-gnu/LICENSE
+baton-27aa08146698-x86_64-unknown-linux-gnu/README.md
+$ ./baton-*-musl/baton --version
+baton 0.2.0
+$ file ./baton-*-musl/baton
+ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, BuildID[sha1]=d08f4cca24d574169222285cb188a6d771bb2b3e, stripped
+$ readelf -lW baton | grep -c INTERP
+0
+$ readelf -d baton | grep -c NEEDED
+0
+```
+Both `.sha256` OK, one top-level dir with the three files each, musl binary prints exactly `baton 0.2.0`, static-pie, no INTERP, no NEEDED. The extracted musl binary's BuildID matches the one in the CI log.
+
+## actionlint
+Status: PROVEN
+```console
+$ docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest ; echo actionlint=$?
+actionlint=0
+```
+
+## Pending (user decision, not failures)
+Publish after a `v0.2.0` tag (verify tag mismatch failure, publish job, SHA256SUMS, release creation) and `baton version --check` reporting up to date once a release exists. Not exercised: tags were forbidden.
+
+## Run 3 verdict
+PROVEN for everything observable without a tag. Overall Task 7 status: PROVEN (tag/publish items pending).
