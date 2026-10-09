@@ -99,7 +99,15 @@ jobs:
           if [[ "$TARGET" == *-musl ]]; then
             desc=$(file "$bin")
             echo "$desc"
-            grep -q 'statically linked' <<<"$desc" || { echo "::error::binary is not statically linked"; exit 1; }
+            # `file` words this as "statically linked" or "static-pie linked" depending on version/PIE.
+            grep -Eq 'statically linked|static-pie linked' <<<"$desc" || { echo "::error::file does not report a static binary"; exit 1; }
+            # Structural check independent of `file`'s wording: no dynamic loader, no shared-library deps.
+            if readelf -lW "$bin" | grep -q 'INTERP'; then
+              echo "::error::binary has an INTERP program header (dynamically linked)"; exit 1
+            fi
+            if readelf -dW "$bin" 2>/dev/null | grep -q '(NEEDED)'; then
+              echo "::error::binary has NEEDED shared-library entries"; exit 1
+            fi
           fi
       - name: Package
         env:
