@@ -32,8 +32,12 @@ pub enum Command {
         #[arg(last = true)]
         cmd: Vec<String>,
     },
-    /// Check the local environment.
-    Doctor,
+    /// Check the local environment and that each profile fires Baton's hooks.
+    Doctor {
+        /// Skip the hook probe (which launches each profile's command briefly).
+        #[arg(long)]
+        no_probe: bool,
+    },
     /// Inspect the configuration.
     Config {
         /// Config action.

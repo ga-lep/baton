@@ -14,9 +14,6 @@ use clap::Parser;
 use cli::{Cli, Command, ConfigAction};
 use std::process::ExitCode;
 
-/// Exit code for subcommands that are not implemented yet.
-const EXIT_NOT_IMPLEMENTED: u8 = 2;
-
 fn main() -> ExitCode {
     // `baton hook` must stay silent and exit 0 whatever it is given, which
     // clap (exit code 2 on bad arguments) cannot promise: dispatch it first.
@@ -43,6 +40,7 @@ fn run(cli: Cli) -> ExitCode {
         }) => cmd::config::check(),
         Some(Command::Daemon { action }) => cmd::daemon::run(&action),
         Some(Command::Debug { args }) => cmd::debug::run(&args),
+        Some(Command::Doctor { no_probe }) => cmd::doctor::run(no_probe),
         None => match tui::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -50,11 +48,5 @@ fn run(cli: Cli) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        _ => not_implemented(),
     }
-}
-
-fn not_implemented() -> ExitCode {
-    eprintln!("not implemented yet");
-    ExitCode::from(EXIT_NOT_IMPLEMENTED)
 }
