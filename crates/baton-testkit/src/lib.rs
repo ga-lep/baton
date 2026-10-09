@@ -1,8 +1,10 @@
 //! Test kit for Baton: PTY driver and fake `claude` helpers.
 
 mod drive;
+mod release_server;
 
 pub use drive::{Drive, DriveOptions, unescape};
+pub use release_server::{ReleaseServer, Reply};
 
 use std::path::PathBuf;
 use std::process::Command;

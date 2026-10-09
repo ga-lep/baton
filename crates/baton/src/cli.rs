@@ -41,6 +41,12 @@ pub enum Command {
         #[arg(long)]
         no_probe: bool,
     },
+    /// Print the version; with `--check`, look for a newer release.
+    Version {
+        /// Query GitHub for the latest release (ignores the cache).
+        #[arg(long)]
+        check: bool,
+    },
     /// Inspect the configuration.
     Config {
         /// Config action.
@@ -91,7 +97,7 @@ mod tests {
     #[test]
     fn help_lists_public_subcommands_but_not_debug() {
         let help = Cli::command().render_help().to_string();
-        for name in ["daemon", "hook", "spike", "doctor", "config"] {
+        for name in ["daemon", "hook", "spike", "doctor", "config", "version"] {
             assert!(help.contains(name), "missing {name}");
         }
         assert!(!help.contains("debug"));

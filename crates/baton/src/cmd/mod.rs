@@ -6,3 +6,4 @@ pub mod debug;
 pub mod doctor;
 pub mod hook;
 pub mod statusline;
+pub mod version;

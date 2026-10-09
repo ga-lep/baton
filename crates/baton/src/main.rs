@@ -9,6 +9,7 @@ mod spike;
 #[allow(dead_code)] // consumed by the TUI client in later tasks
 mod term;
 mod tui;
+mod update;
 
 use clap::Parser;
 use cli::{Cli, Command, ConfigAction};
@@ -44,6 +45,7 @@ fn run(cli: Cli) -> ExitCode {
         }) => cmd::config::check(),
         Some(Command::Daemon { action }) => cmd::daemon::run(&action),
         Some(Command::Debug { args }) => cmd::debug::run(&args),
+        Some(Command::Version { check }) => cmd::version::run(check),
         Some(Command::Doctor { no_probe }) => cmd::doctor::run(no_probe),
         None => match tui::run() {
             Ok(()) => ExitCode::SUCCESS,
