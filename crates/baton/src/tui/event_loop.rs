@@ -71,7 +71,7 @@ fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
                     app.set_keymap(settings.keymap);
                     app.set_editor(settings.editor);
                 }
-                Err(e) => app.notice = Some(format!("config: {e}")),
+                Err(e) => app.on_config_error(e),
             }
             *conn = Some(c);
         }

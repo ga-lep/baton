@@ -130,11 +130,11 @@ pub struct Settings {
 /// Project names, key bindings and editor from the config file.
 ///
 /// # Errors
-/// A message describing why the config could not be read or is invalid.
+/// The config path, a newline, then why it could not be read or is invalid.
 pub fn load_settings() -> Result<Settings, String> {
     let path = paths::config_file().map_err(|e| e.to_string())?;
     let config = Config::load(&path, &|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{}\n{e}", path.display()))?;
     Ok(Settings {
         projects: config.projects.into_iter().map(|p| p.name).collect(),
         keymap: config.keybindings,

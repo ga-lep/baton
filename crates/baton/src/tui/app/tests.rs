@@ -990,3 +990,28 @@ fn a_remapped_help_key_opens_and_closes_help() {
     app.on_event(key(KeyCode::F(1)), HOST);
     assert_eq!(app.overlay, Overlay::None);
 }
+
+#[test]
+fn config_error_popup_is_dismissed_by_any_key_and_q_quits() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.on_config_error("/c.toml\ninvalid config: boom".into());
+    assert_eq!(app.overlay, Overlay::ConfigError);
+    assert_eq!(app.config_error(), Some("/c.toml\ninvalid config: boom"));
+    // The dismissing key is swallowed: j does not move the cursor.
+    assert!(app.on_event(ch('j'), HOST).is_empty());
+    assert_eq!(app.overlay, Overlay::None);
+    assert_eq!(shown(&app), Some("x//a"));
+    assert_eq!(app.notice.as_deref(), Some(CONFIG_ERROR_NOTICE));
+
+    app.on_config_error("x".into());
+    assert_eq!(app.on_event(ch('q'), HOST), vec![Effect::Quit]);
+}
+
+#[test]
+fn reconnecting_clears_the_config_error() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.on_config_error("x".into());
+    app.on_connected();
+    assert_eq!(app.overlay, Overlay::None);
+    assert_eq!(app.config_error(), None);
+}

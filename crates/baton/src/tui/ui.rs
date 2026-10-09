@@ -196,7 +196,50 @@ pub fn draw(f: &mut Frame, app: &App) {
         Overlay::VersionMismatch { daemon } => modal(f, &mismatch_text(daemon)),
         Overlay::Disconnected => modal(f, DISCONNECTED_TEXT),
         Overlay::Help => super::help::draw(f, app.keymap()),
+        Overlay::ConfigError => config_error(f, app.config_error().unwrap_or_default()),
     }
+}
+
+/// The popup for a config file that failed to load; `message` keeps its line
+/// breaks (TOML errors point at the offending column).
+fn config_error(f: &mut Frame, message: &str) {
+    let mut lines: Vec<Line> = message.lines().map(|l| Line::from(l.to_owned())).collect();
+    lines.push(Line::default());
+    lines.push(Line::from(
+        "Projects from the config are hidden and default keys are in use.",
+    ));
+    lines.push(Line::from(
+        "Fix the file, then check it with `baton config check`.",
+    ));
+    lines.push(Line::default());
+    lines.push(Line::styled(
+        "Any key to dismiss · q to quit",
+        Style::default().add_modifier(Modifier::DIM),
+    ));
+    let area = f.area();
+    let longest = lines.iter().map(Line::width).max().unwrap_or(0);
+    let width = u16::try_from(longest + 4)
+        .unwrap_or(u16::MAX)
+        .min(area.width);
+    let height = u16::try_from(lines.len() + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(" Config error "),
+        ),
+        rect,
+    );
 }
 
 fn modal(f: &mut Frame, text: &str) {
@@ -435,5 +478,19 @@ mod tests {
             let mut t = Terminal::new(TestBackend::new(w, h)).expect("terminal");
             t.draw(|f| draw(f, &app)).expect("draw");
         }
+    }
+
+    #[test]
+    fn config_error_popup_shows_the_path_and_the_toml_error_lines() {
+        let mut app = App::new(Rect::new(0, 0, 120, 40));
+        app.on_config_error(
+            "/h/.config/baton/config.toml\ninvalid config: TOML parse error at line 22, column 4\n   |\n22 |    { path = \"a\" }\n   |    ^".into(),
+        );
+        let screen = render(&app);
+        assert!(screen.contains("Config error"));
+        assert!(screen.contains("/h/.config/baton/config.toml"));
+        assert!(screen.contains("TOML parse error at line 22, column 4"));
+        assert!(screen.contains("22 |    { path = \"a\" }"));
+        assert!(screen.contains("Any key to dismiss · q to quit"));
     }
 }

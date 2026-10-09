@@ -32,6 +32,8 @@ pub enum Overlay {
     Disconnected,
     /// The key binding overview (`?`).
     Help,
+    /// The config file could not be loaded (message in [`App::config_error`]).
+    ConfigError,
 }
 
 /// Something the event loop must do on behalf of the reducer.
@@ -59,6 +61,9 @@ pub const FLASH_FOR: Duration = Duration::from_secs(5);
 
 /// Hint shown when scrolling is refused on the alternate screen.
 pub const ALT_SCREEN_HINT: &str = "app manages its own scrolling (mouse wheel)";
+
+/// Info-panel notice left once the config error popup is dismissed.
+pub const CONFIG_ERROR_NOTICE: &str = "config file is invalid; run `baton config check`";
 
 /// Hint shown when `n` finds no session to jump to.
 pub const NO_ATTENTION_HINT: &str = "no session needs attention";
@@ -101,6 +106,8 @@ pub struct App {
     pub notice: Option<String>,
     /// The session a pending `Restart <repo>? [y/N]` prompt is about.
     confirm: Option<SessionId>,
+    /// Why the config file could not be loaded, for the `ConfigError` overlay.
+    config_error: Option<String>,
     size: (u16, u16),
     /// Whether the host terminal has focus (assumed until told otherwise).
     terminal_focused: bool,
@@ -156,6 +163,7 @@ impl App {
             pacer,
             notice: None,
             confirm: None,
+            config_error: None,
             terminal_focused: true,
             sent_view: None,
             keymap: Keymap::default(),
@@ -279,6 +287,7 @@ impl App {
         self.overlay = Overlay::None;
         self.notice = None;
         self.confirm = None;
+        self.config_error = None;
         self.sent_view = None;
         self.pacer.mark_dirty();
     }
@@ -288,6 +297,19 @@ impl App {
         let id = self.confirm.as_ref()?;
         let s = self.sessions.iter().find(|s| &s.id == id)?;
         Some(format!("Restart {}? [y/N]", sidebar::repo_name(s)))
+    }
+
+    /// The config file could not be loaded: pops up `message` until a key is pressed.
+    pub fn on_config_error(&mut self, message: String) {
+        self.config_error = Some(message);
+        self.overlay = Overlay::ConfigError;
+        self.notice = Some(CONFIG_ERROR_NOTICE.to_owned());
+        self.pacer.mark_dirty();
+    }
+
+    /// Why the config file could not be loaded, if it could not.
+    pub fn config_error(&self) -> Option<&str> {
+        self.config_error.as_deref()
     }
 
     /// The daemon connection is gone.
@@ -783,6 +805,13 @@ impl App {
             Overlay::Help => {
                 self.on_help_key(key);
                 return Vec::new();
+            }
+            Overlay::ConfigError => {
+                self.overlay = Overlay::None;
+                return match key.code {
+                    KeyCode::Char('q') => vec![Effect::Quit],
+                    _ => Vec::new(),
+                };
             }
             Overlay::None => {}
         }
