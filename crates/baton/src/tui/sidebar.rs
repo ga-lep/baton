@@ -25,7 +25,8 @@ pub enum Row<'a> {
     Project {
         /// Project name.
         name: &'a str,
-        /// Whether the daemon has any session for it.
+        /// Whether the daemon has any running or exited session for it, as
+        /// opposed to none or only remembered ones.
         open: bool,
         /// Whether any of those sessions is still running.
         live: bool,
@@ -103,8 +104,11 @@ pub fn rows<'a>(projects: &'a [String], sessions: &'a [SessionInfo]) -> Vec<Row<
         let mine: Vec<&SessionInfo> = sessions.iter().filter(|s| s.project == name).collect();
         out.push(Row::Project {
             name,
-            open: !mine.is_empty(),
-            live: mine.iter().any(|s| !matches!(s.status, Status::Exited(_))),
+            // Remembered-only sessions do not make a project open.
+            open: mine.iter().any(|s| s.status != Status::Closed),
+            live: mine
+                .iter()
+                .any(|s| !matches!(s.status, Status::Exited(_) | Status::Closed)),
         });
         for (i, info) in mine.into_iter().enumerate() {
             out.push(Row::Session { n: i + 1, info });
@@ -211,5 +215,33 @@ mod tests {
                 Style::default()
             ]
         );
+    }
+
+    #[test]
+    fn remembered_sessions_sit_under_a_project_that_is_still_closed() {
+        let projects = vec!["a".to_owned(), "b".to_owned()];
+        let sessions = vec![
+            info("a", "/r/one", Status::Closed),
+            info("b", "/r/two", Status::Idle),
+        ];
+        let rows = rows(&projects, &sessions);
+        let text: Vec<String> = rows.iter().map(Row::text).collect();
+        assert_eq!(
+            text,
+            vec![
+                "▸ a  (closed)",
+                "  1 ◌ one  closed",
+                "▾ b",
+                "  1 ○ two  idle",
+            ]
+        );
+        assert!(matches!(
+            rows[0],
+            Row::Project {
+                open: false,
+                live: false,
+                ..
+            }
+        ));
     }
 }

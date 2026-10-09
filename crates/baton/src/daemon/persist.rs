@@ -45,6 +45,10 @@ impl Store {
         if let Some(problem) = &loaded.problem {
             tracing::warn!("ignoring unusable state file, starting empty: {problem}");
         } else {
+            for id in &loaded.dropped {
+                // The key is file content: `{:?}` escapes control characters.
+                tracing::warn!("dropping unreadable state entry {id:?}");
+            }
             tracing::info!(sessions = loaded.state.sessions.len(), "state loaded");
         }
         Arc::new(Self {

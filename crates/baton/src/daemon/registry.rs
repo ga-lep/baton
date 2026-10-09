@@ -168,13 +168,68 @@ impl Registry {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Summaries of all sessions, in creation order.
+    /// Summaries of all sessions, in creation order, followed by the
+    /// remembered ones that are not running (status [`Status::Closed`]).
     pub fn list(&self) -> Vec<SessionInfo> {
-        self.lock()
-            .sessions
-            .iter()
-            .map(SessionHandle::info)
-            .collect()
+        let remembered = self.remembered();
+        let inner = self.lock();
+        Self::listing(&inner, remembered)
+    }
+
+    /// Live sessions plus those of `remembered` that have no live session.
+    fn listing(inner: &Inner, remembered: Vec<SessionInfo>) -> Vec<SessionInfo> {
+        let mut list: Vec<SessionInfo> = inner.sessions.iter().map(SessionHandle::info).collect();
+        let live = list.len();
+        for r in remembered {
+            if !list[..live].iter().any(|s| s.id == r.id) {
+                list.push(r);
+            }
+        }
+        list
+    }
+
+    /// The sessions in `state.json` whose project and repo are still in the
+    /// current config, as not-running summaries. Reads the config, so call it
+    /// without holding the registry lock.
+    fn remembered(&self) -> Vec<SessionInfo> {
+        let config = match Self::load_config() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!("not listing remembered sessions: {e}");
+                return Vec::new();
+            }
+        };
+        let mut out = Vec::new();
+        for spec in config.projects.iter().flat_map(|p| &p.sessions) {
+            // A repo that no longer exists has no id.
+            let Ok(id) = SessionId::from_repo(&spec.project, &spec.repo) else {
+                continue;
+            };
+            let Some(p) = self.store.get(&id) else {
+                continue;
+            };
+            out.push(SessionInfo {
+                id,
+                project: p.project,
+                repo: p.repo,
+                profile: p.profile,
+                status: Status::Closed,
+                claude_session_id: p.claude_session_id,
+                transcript_path: p.transcript_path,
+                model: None,
+                started_at: p.updated_at,
+                exit_code: None,
+                usage: None,
+                launch: None,
+            });
+        }
+        out
+    }
+
+    fn load_config() -> Result<Config, OpenError> {
+        let path = paths::config_file().map_err(|e| OpenError::Config(e.to_string()))?;
+        Config::load(&path, &|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+            .map_err(|e| OpenError::Config(e.to_string()))
     }
 
     /// Re-reads the config and spawns the project's sessions that are not
@@ -184,9 +239,7 @@ impl Registry {
     /// If the config is unreadable, the project is unknown, or any spawn
     /// fails (the sessions that did start stay up).
     pub fn open_project(&self, name: &str) -> Result<Vec<SessionInfo>, OpenError> {
-        let path = paths::config_file().map_err(|e| OpenError::Config(e.to_string()))?;
-        let config = Config::load(&path, &|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
-            .map_err(|e| OpenError::Config(e.to_string()))?;
+        let config = Self::load_config()?;
         let project = config
             .projects
             .iter()
@@ -249,6 +302,7 @@ impl Registry {
                 Err(e) => failures.push(format!("{}: {e:#}", spec.repo.display())),
             }
         }
+        let remembered = self.remembered();
         let mut guard = self.lock();
         let inner = &mut *guard;
         let mut fresh = Vec::new();
@@ -273,7 +327,7 @@ impl Registry {
         if let Some(att) = &inner.attached
             && !fresh.is_empty()
         {
-            let list = inner.sessions.iter().map(SessionHandle::info).collect();
+            let list = Self::listing(inner, remembered);
             att.sink.send(DaemonMsg::SessionList(list));
             for s in inner.sessions.iter().filter(|s| fresh.contains(&s.id)) {
                 s.send(Cmd::Attach {
@@ -382,6 +436,7 @@ impl Registry {
     /// Queues `SessionList`, then one `Snapshot` per session (in order),
     /// after which output streams to `tx`.
     pub fn attach(&self, conn: u64, rows: u16, cols: u16, sink: &ClientSink) {
+        let remembered = self.remembered();
         let mut inner = self.lock();
         if let Some(old) = inner.attached.replace(Attached {
             conn,
@@ -398,8 +453,7 @@ impl Registry {
             terminal_focused: true,
         };
         inner.view = Some(view.clone());
-        let list = inner.sessions.iter().map(SessionHandle::info).collect();
-        sink.send(DaemonMsg::SessionList(list));
+        sink.send(DaemonMsg::SessionList(Self::listing(&inner, remembered)));
         for s in &inner.sessions {
             s.send(Cmd::SetView(Some(view.clone())));
             s.send(Cmd::Resize { rows, cols });

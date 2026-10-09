@@ -1,7 +1,8 @@
 //! End-to-end tests for persistence, the launch ladder and restart (`fake-claude`).
 
 use anyhow::{Context, Result, bail, ensure};
-use baton_testkit::{bin_path, wait_for};
+use baton_testkit::{Drive, DriveOptions, bin_path, wait_for};
+use regex::Regex;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -49,6 +50,33 @@ impl Env {
             .env("FAKE_CLAUDE_HOME", self.p("fake-claude"))
             .env("FAKE_CLAUDE_LOG", self.p("launch.log"));
         Ok(c.output()?)
+    }
+
+    fn baton_env(&self, args: &[&str], extra: &[(&str, &str)]) -> Result<Output> {
+        let mut c = Command::new(bin_path("baton")?);
+        c.args(args).stdin(std::process::Stdio::null());
+        c.env("BATON_CONFIG", self.p("config.toml"))
+            .env("BATON_STATE_DIR", self.p("state"))
+            .env("BATON_RUNTIME_DIR", self.p("run"))
+            .env("BATON_NOTIFY_SINK", "off")
+            .env("FAKE_CLAUDE_HOME", self.p("fake-claude"))
+            .env("FAKE_CLAUDE_LOG", self.p("launch.log"));
+        for (k, v) in extra {
+            c.env(k, v);
+        }
+        Ok(c.output()?)
+    }
+
+    fn envs(&self) -> Vec<(String, String)> {
+        let p = |n: &str| self.p(n).display().to_string();
+        vec![
+            ("BATON_CONFIG".into(), p("config.toml")),
+            ("BATON_STATE_DIR".into(), p("state")),
+            ("BATON_RUNTIME_DIR".into(), p("run")),
+            ("BATON_NOTIFY_SINK".into(), "off".into()),
+            ("FAKE_CLAUDE_HOME".into(), p("fake-claude")),
+            ("FAKE_CLAUDE_LOG".into(), p("launch.log")),
+        ]
     }
 
     fn ok(&self, args: &[&str]) -> Result<Output> {
@@ -282,5 +310,114 @@ fn a_foreign_session_id_in_state_json_never_reaches_the_command_line() -> Result
         assert!(!argv.iter().any(|a| a.contains("dangerously")), "{argv:?}");
         assert!(!argv.contains(&"--resume".to_owned()), "{argv:?}");
     }
+    Ok(())
+}
+
+/// Runs a session to idle, waits for it to be persisted, stops the daemon.
+fn persist_and_stop(env: &Env) -> Result<String> {
+    env.ok(&["debug", "open", "x"])?;
+    let (id, _) = env.wait_idle()?;
+    env.wait_persisted(&id)?;
+    env.stop()?;
+    Ok(id)
+}
+
+#[test]
+fn a_persisted_session_is_listed_as_closed_after_a_daemon_restart() -> Result<()> {
+    let env = Env::new()?;
+    let id = persist_and_stop(&env)?;
+    // Any command starts a fresh daemon; nothing is opened.
+    let s = env
+        .session()?
+        .context("the remembered session is not listed")?;
+    assert_eq!(s["status"], "Closed", "{s}");
+    assert_eq!(s["claude_session_id"], id.as_str());
+    assert!(s["transcript_path"].is_string(), "{s}");
+    assert!(s["launch"].is_null(), "{s}");
+    assert_eq!(s["project"], "x");
+    assert_eq!(env.launches().len(), 2, "listing must not launch anything");
+
+    // Opening the project replaces it with a live session resuming the id.
+    env.ok(&["debug", "open", "x"])?;
+    let launches = env.wait_launches(3)?;
+    assert!(has_pair(&launches[2], "--resume", &id), "{launches:?}");
+    let (again, live) = env.wait_idle()?;
+    assert_eq!(again, id);
+    assert_eq!(live["launch"], "resume");
+    let out = env.ok(&["debug", "sessions", "--json"])?;
+    let list: Vec<Value> = serde_json::from_slice(&out.stdout)?;
+    assert_eq!(list.len(), 1, "no duplicate closed entry: {list:?}");
+    Ok(())
+}
+
+#[test]
+fn remembered_sessions_of_projects_gone_from_the_config_are_not_listed() -> Result<()> {
+    let env = Env::new()?;
+    persist_and_stop(&env)?;
+    let config = std::fs::read_to_string(env.p("config.toml"))?;
+    std::fs::write(
+        env.p("config.toml"),
+        config.replace("name = \"x\"", "name = \"renamed\""),
+    )?;
+    assert!(env.session()?.is_none());
+    Ok(())
+}
+
+#[test]
+fn the_tui_shows_a_remembered_session_under_its_closed_project() -> Result<()> {
+    let env = Env::new()?;
+    persist_and_stop(&env)?;
+    let argv = vec![bin_path("baton")?.display().to_string()];
+    let mut d = Drive::spawn(
+        &argv,
+        &DriveOptions {
+            rows: 30,
+            cols: 100,
+            env: env.envs(),
+            cwd: None,
+        },
+    )?;
+    d.wait_for(&Regex::new("▸ x  \\(closed\\)")?, WAIT)?;
+    d.wait_for(&Regex::new("1 . r  closed")?, WAIT)?;
+    assert_eq!(env.launches().len(), 2, "nothing launched yet");
+    // Opening the project makes it live.
+    d.send(b"o")?;
+    d.wait_for(&Regex::new("▾ x")?, WAIT)?;
+    d.wait_for(&Regex::new("1 . r  idle")?, WAIT)?;
+    let launches = env.wait_launches(3)?;
+    assert!(launches[2].contains(&"--resume".to_owned()), "{launches:?}");
+    d.send(b"q")?;
+    assert_eq!(d.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_failed_resume_keeps_the_stored_id_until_session_start_replaces_it() -> Result<()> {
+    let env = Env::new()?;
+    let id = persist_and_stop(&env)?;
+    // The conversation file now has another name: --resume <id> fails early,
+    // --continue finds it, and with hooks off no SessionStart ever reports
+    // an id.
+    let dir = std::fs::read_dir(env.p("fake-claude/projects"))?
+        .next()
+        .context("no project dir")??
+        .path();
+    std::fs::rename(dir.join(format!("{id}.jsonl")), dir.join("other.jsonl"))?;
+    env.baton_env(&["debug", "open", "x"], &[("FAKE_CLAUDE_NO_HOOKS", "1")])?;
+    let launches = env.wait_launches(4)?;
+    assert!(has_pair(&launches[2], "--resume", &id), "{launches:?}");
+    assert!(
+        launches[3].contains(&"--continue".to_owned()),
+        "{launches:?}"
+    );
+    let s = env.wait_session("the continue rung", |s| s["launch"] == "continue")?;
+    assert_eq!(s["claude_session_id"], id.as_str(), "{s}");
+    let path = env.p("state/state.json");
+    wait_for(WAIT, || {
+        let v: Value = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+        let e = &v["sessions"][env.sid()];
+        (e["claude_session_id"] == id.as_str()).then_some(())
+    })
+    .context("state.json lost the stored id")?;
     Ok(())
 }

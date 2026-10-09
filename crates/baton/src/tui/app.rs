@@ -94,6 +94,10 @@ pub struct App {
     sent_view: Option<(Option<SessionId>, bool)>,
 }
 
+fn is_closed(s: &SessionInfo) -> bool {
+    s.status == Status::Closed
+}
+
 fn inner_size(l: &Layout) -> (u16, u16) {
     (l.inner.height.max(1), l.inner.width.max(1))
 }
@@ -401,6 +405,11 @@ impl App {
             return Vec::new();
         };
         let (id, status) = (s.id.clone(), s.status);
+        if status == Status::Closed {
+            // Nothing runs yet: opening the project is what brings it back.
+            let project = s.project.clone();
+            return self.open_project(project);
+        }
         if matches!(status, Status::Running | Status::Permission) {
             self.confirm = Some(id);
             return Vec::new();
@@ -414,11 +423,18 @@ impl App {
         let rows = self.rows();
         let first_of = |name: &str| {
             rows.iter().find_map(|r| match r {
-                Row::Session { info, .. } if info.project == name => Some(info.id.clone()),
+                Row::Session { info, .. }
+                    if info.project == name && info.status != Status::Closed =>
+                {
+                    Some(info.id.clone())
+                }
                 _ => None,
             })
         };
         match self.cursor.clone() {
+            Some(Cursor::Session(_)) if self.selected_session().is_some_and(is_closed) => self
+                .cursor_project()
+                .map_or_else(Vec::new, |n| self.open_project(n)),
             Some(Cursor::Session(_)) => {
                 self.mode = Mode::Focus;
                 Vec::new()

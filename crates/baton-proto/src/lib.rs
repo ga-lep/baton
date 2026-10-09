@@ -160,6 +160,7 @@ mod tests {
             Status::Idle,
             Status::Exited(3),
             Status::Unknown,
+            Status::Closed,
         ] {
             rt(s);
         }

@@ -535,8 +535,11 @@ impl Task {
             let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
             info.exit_code = None;
             info.launch = Some(rung.label().to_owned());
-            info.claude_session_id = rung.known_session_id().map(str::to_owned);
-            if !matches!(rung, Rung::Resume(_)) {
+            // `--continue` does not know the id: keep the remembered one (and
+            // its transcript) until a SessionStart reports the real one.
+            info.claude_session_id =
+                launch::id_after_launch(info.claude_session_id.as_deref(), &rung);
+            if matches!(rung, Rung::Fresh(_)) {
                 info.transcript_path = None;
             }
         }

@@ -12,6 +12,7 @@ pub fn badge(status: Status) -> &'static str {
         Status::Idle => "○",
         Status::Exited(_) => "✗",
         Status::Unknown => "?",
+        Status::Closed => "◌",
     }
 }
 
@@ -25,5 +26,6 @@ pub fn status_label(status: Status) -> String {
         Status::Idle => "idle".into(),
         Status::Exited(code) => format!("exited {code}"),
         Status::Unknown => "unknown".into(),
+        Status::Closed => "closed".into(),
     }
 }

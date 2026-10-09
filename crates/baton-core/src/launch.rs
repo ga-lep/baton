@@ -87,6 +87,15 @@ pub fn is_early_failure(code: i32, elapsed: Duration, saw_session_start: bool) -
     code != 0 && elapsed < EARLY_FAILURE_WINDOW && !saw_session_start
 }
 
+/// The conversation id to record when a child is launched with `rung`.
+///
+/// Only a rung that carries an id replaces the remembered one; `--continue`
+/// keeps `previous` until a `SessionStart` reports the real id, so a transient
+/// failure of `--resume` cannot erase it.
+pub fn id_after_launch(previous: Option<&str>, rung: &Rung) -> Option<String> {
+    rung.known_session_id().or(previous).map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +176,25 @@ mod tests {
                 is_early_failure(code, elapsed, saw),
                 want,
                 "{code} {elapsed:?} {saw}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_rung_with_an_id_replaces_the_remembered_id() {
+        let (a, b) = ("a-id", "b-id");
+        let table = [
+            (Some(a), Rung::Resume(b.into()), Some(b)),
+            (None, Rung::Resume(b.into()), Some(b)),
+            (Some(a), Rung::Fresh(b.into()), Some(b)),
+            (Some(a), Rung::Continue, Some(a)),
+            (None, Rung::Continue, None),
+        ];
+        for (prev, rung, want) in table {
+            assert_eq!(
+                id_after_launch(prev, &rung).as_deref(),
+                want,
+                "{prev:?} {rung:?}"
             );
         }
     }

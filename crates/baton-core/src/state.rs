@@ -57,6 +57,17 @@ pub struct Loaded {
     /// Why the file was set aside, for the log; `None` when it was fine or
     /// simply absent.
     pub problem: Option<String>,
+    /// Keys of entries that could not be parsed and were left out; the rest
+    /// of the file is still used.
+    pub dropped: Vec<String>,
+}
+
+/// The file as first parsed: entries stay raw so that a bad one only costs
+/// itself.
+#[derive(Deserialize)]
+struct RawState {
+    version: u32,
+    sessions: BTreeMap<String, serde_json::Value>,
 }
 
 fn clean(s: &str) -> bool {
@@ -83,7 +94,7 @@ impl State {
     }
 }
 
-fn read_checked(path: &Path) -> Result<Option<State>, String> {
+fn read_checked(path: &Path) -> Result<Option<(State, Vec<String>)>, String> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -105,11 +116,21 @@ fn read_checked(path: &Path) -> Result<Option<State>, String> {
     if bytes.len() > MAX_BYTES {
         return Err(format!("larger than {MAX_BYTES} bytes"));
     }
-    let state: State = serde_json::from_slice(&bytes).map_err(|e| format!("invalid JSON: {e}"))?;
-    if state.version != VERSION {
-        return Err(format!("unsupported version {}", state.version));
+    let raw: RawState = serde_json::from_slice(&bytes).map_err(|e| format!("invalid JSON: {e}"))?;
+    if raw.version != VERSION {
+        return Err(format!("unsupported version {}", raw.version));
     }
-    Ok(Some(state))
+    let mut state = State::default();
+    let mut dropped = Vec::new();
+    for (id, value) in raw.sessions {
+        match serde_json::from_value::<PersistedSession>(value) {
+            Ok(entry) => {
+                state.sessions.insert(id, entry);
+            }
+            Err(_) => dropped.push(id),
+        }
+    }
+    Ok(Some((state, dropped)))
 }
 
 /// Loads `path` tolerantly. A missing file gives an empty state. A file that
@@ -120,12 +141,14 @@ pub fn load(path: &Path, now: u64) -> Loaded {
         Ok(None) => Loaded {
             state: State::default(),
             problem: None,
+            dropped: Vec::new(),
         },
-        Ok(Some(mut state)) => {
+        Ok(Some((mut state, dropped))) => {
             state.sanitize();
             Loaded {
                 state,
                 problem: None,
+                dropped,
             }
         }
         Err(why) => {
@@ -139,6 +162,7 @@ pub fn load(path: &Path, now: u64) -> Loaded {
             Loaded {
                 state: State::default(),
                 problem: Some(format!("{}: {why}; {moved}", path.display())),
+                dropped: Vec::new(),
             }
         }
     }
@@ -257,7 +281,7 @@ mod tests {
             b"[1,2,3]",
             b"\xff\xfe\x00",
             br#"{"version":99,"sessions":{}}"#,
-            br#"{"version":1,"sessions":{"a":{"project":5}}}"#,
+            br#"{"version":1,"sessions":[1]}"#,
         ]
         .into_iter()
         .enumerate()
@@ -272,6 +296,28 @@ mod tests {
             let bad = t.path().join("state.json.bad-1234");
             assert_eq!(std::fs::read(&bad).unwrap(), junk, "case {i}");
         }
+    }
+
+    #[test]
+    fn one_malformed_entry_drops_only_that_entry() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("state.json");
+        let good = serde_json::to_value(entry()).unwrap();
+        let json = serde_json::json!({
+            "version": 1,
+            "sessions": {
+                "x//tmp/r": good,
+                "bad1": {"project": 5},
+                "bad2": "nope",
+                "bad3": null,
+            }
+        });
+        std::fs::write(&p, json.to_string()).unwrap();
+        let loaded = load(&p, 1);
+        assert_eq!(loaded.problem, None);
+        assert_eq!(loaded.state, state());
+        assert_eq!(loaded.dropped, ["bad1", "bad2", "bad3"]);
+        assert!(p.exists(), "the file is not set aside");
     }
 
     #[test]

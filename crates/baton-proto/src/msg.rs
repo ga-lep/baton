@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bump on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Maximum size of one frame (16 MiB).
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -166,6 +166,9 @@ pub enum Status {
     Idle,
     Exited(i32),
     Unknown,
+    /// Remembered in `state.json` but not running; opening its project
+    /// resumes it. Never the status of a live session.
+    Closed,
 }
 
 /// Token usage and estimated cost.

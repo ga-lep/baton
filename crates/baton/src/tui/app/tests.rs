@@ -776,3 +776,50 @@ fn r_is_data_in_focus_mode() {
     assert!(restarts(&effects).is_empty());
     assert_eq!(sent(&effects), [(sid("x//a"), b"r".to_vec())]);
 }
+
+fn closed_app() -> App {
+    let mut app = App::new(HOST);
+    app.set_projects(vec!["x".into()]);
+    app.on_daemon(
+        DaemonMsg::SessionList(vec![info("x//a", Status::Closed)]),
+        Instant::now(),
+    );
+    app
+}
+
+fn open_x() -> Vec<Effect> {
+    vec![Effect::Send(ClientMsg::OpenProject { name: "x".into() })]
+}
+
+#[test]
+fn enter_or_r_on_a_remembered_session_opens_its_project_instead() {
+    for k in [KeyCode::Enter, KeyCode::Char('l'), KeyCode::Char('r')] {
+        let mut app = closed_app();
+        cursor_is(&app, Cursor::Session(sid("x//a")));
+        assert_eq!(app.on_event(key(k), HOST), open_x(), "{k:?}");
+        assert_eq!(app.mode, Mode::Normal, "{k:?}");
+    }
+}
+
+#[test]
+fn enter_on_a_project_with_only_remembered_sessions_opens_it() {
+    let mut app = closed_app();
+    app.on_event(ch('k'), HOST);
+    cursor_is(&app, Cursor::Project("x".into()));
+    assert_eq!(app.on_event(key(KeyCode::Enter), HOST), open_x());
+}
+
+#[test]
+fn opening_replaces_remembered_sessions_with_live_ones() {
+    let mut app = closed_app();
+    app.on_daemon(
+        DaemonMsg::SessionList(vec![info("x//a", Status::Starting)]),
+        Instant::now(),
+    );
+    assert_eq!(
+        app.selected_session().map(|s| s.status),
+        Some(Status::Starting)
+    );
+    app.on_event(key(KeyCode::Enter), HOST);
+    assert_eq!(app.mode, Mode::Focus);
+}
