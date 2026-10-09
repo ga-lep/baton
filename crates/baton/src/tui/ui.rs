@@ -81,8 +81,8 @@ pub fn focus_bar(keymap: &Keymap) -> String {
 }
 /// Shown when the daemon connection is lost.
 pub const DISCONNECTED_TEXT: &str = "daemon disconnected — press r to reconnect, q to quit";
-/// Height of the info panel under the session list: 11 rows, a notice and the border.
-const INFO_HEIGHT: u16 = 14;
+/// Height of the info panel under the session list: 13 rows, a notice and the border.
+const INFO_HEIGHT: u16 = 16;
 
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
@@ -301,6 +301,7 @@ mod tests {
             exit_code: None,
             usage: None,
             launch: None,
+            quota: None,
         };
         let now = Instant::now();
         app.on_daemon(DaemonMsg::SessionList(vec![info]), now);

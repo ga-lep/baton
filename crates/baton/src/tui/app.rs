@@ -392,6 +392,12 @@ impl App {
                 }
                 self.pacer.mark_dirty();
             }
+            DaemonMsg::QuotaUpdated { session, quota } => {
+                if let Some(s) = self.sessions.iter_mut().find(|s| s.id == session) {
+                    s.quota = Some(quota);
+                }
+                self.pacer.mark_dirty();
+            }
             DaemonMsg::Scrollback {
                 session,
                 start,

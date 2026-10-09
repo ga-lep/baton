@@ -160,6 +160,7 @@ mod tests {
             exit_code: None,
             usage: None,
             launch: None,
+            quota: None,
         }
     }
 

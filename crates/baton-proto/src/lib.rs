@@ -42,6 +42,13 @@ mod tests {
             exit_code: Some(0),
             usage: Some(usage()),
             launch: Some("resume".into()),
+            quota: Some(Quota {
+                five_hour: Some(QuotaWindow {
+                    used_pct: 23.5,
+                    resets_at: 1_700_018_000,
+                }),
+                seven_day: None,
+            }),
         }
     }
 

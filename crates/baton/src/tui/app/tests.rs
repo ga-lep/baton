@@ -18,6 +18,7 @@ fn info(id: &str, status: Status) -> SessionInfo {
         exit_code: None,
         usage: None,
         launch: None,
+        quota: None,
     }
 }
 
@@ -1014,4 +1015,29 @@ fn reconnecting_clears_the_config_error() {
     app.on_connected();
     assert_eq!(app.overlay, Overlay::None);
     assert_eq!(app.config_error(), None);
+}
+
+#[test]
+fn quota_updates_reach_the_session() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    let quota = baton_proto::Quota {
+        five_hour: Some(baton_proto::QuotaWindow {
+            used_pct: 12.0,
+            resets_at: 9,
+        }),
+        seven_day: None,
+    };
+    app.on_daemon(
+        DaemonMsg::QuotaUpdated {
+            session: sid("x//a"),
+            quota,
+        },
+        Instant::now(),
+    );
+    let s = app
+        .sessions
+        .iter()
+        .find(|s| s.id == sid("x//a"))
+        .expect("session");
+    assert_eq!(s.quota, Some(quota));
 }
