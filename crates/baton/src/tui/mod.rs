@@ -3,6 +3,7 @@
 pub mod app;
 pub mod editor;
 pub mod event_loop;
+pub mod git;
 pub mod help;
 pub mod info_panel;
 pub mod keys;

@@ -1,5 +1,6 @@
 //! Claude Code hook plumbing: the injected settings JSON and payload parsing.
 
+use baton_proto::{Quota, QuotaWindow};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -26,7 +27,9 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// The `--settings` JSON registering `<exe> hook <Event>` for every event.
+/// The `--settings` JSON registering `<exe> hook <Event>` for every event and
+/// `<exe> statusline` as the status line (which relays the quota to the daemon
+/// and runs the user's own status line command, if configured).
 ///
 /// The exe path is shell-quoted because Claude runs hook commands through a
 /// shell; a non-UTF-8 path is converted lossily.
@@ -43,7 +46,11 @@ pub fn settings_json(exe: &Path) -> String {
             ((*event).to_owned(), entry)
         })
         .collect();
-    json!({ "hooks": hooks }).to_string()
+    json!({
+        "hooks": hooks,
+        "statusLine": {"type": "command", "command": format!("{exe} statusline"), "padding": 0},
+    })
+    .to_string()
 }
 
 /// The fields of a hook's stdin JSON that Baton uses; everything is optional
@@ -75,6 +82,28 @@ impl HookPayload {
             tool_name: field("tool_name"),
         }
     }
+}
+
+/// The subscription quota in a status line payload (`rate_limits`), or `None`
+/// when it has no usable window. Percentages must lie in 0..=100 and reset
+/// times be positive; anything else drops that window.
+pub fn parse_quota(json: &str) -> Option<Quota> {
+    let v: Value = serde_json::from_str(json).ok()?;
+    let limits = v.get("rate_limits")?;
+    let window = |name: &str| {
+        let w = limits.get(name)?;
+        let used_pct = w.get("used_percentage")?.as_f64()?;
+        let resets_at = w.get("resets_at")?.as_u64().filter(|t| *t > 0)?;
+        (0.0..=100.0).contains(&used_pct).then_some(QuotaWindow {
+            used_pct: used_pct as f32,
+            resets_at,
+        })
+    };
+    let quota = Quota {
+        five_hour: window("five_hour"),
+        seven_day: window("seven_day"),
+    };
+    (quota.five_hour.is_some() || quota.seven_day.is_some()).then_some(quota)
 }
 
 /// Longest accepted session id or model name.
@@ -169,6 +198,47 @@ mod tests {
         let v = p.validated();
         assert_eq!(v.cwd.as_deref(), Some("/c"));
         assert_eq!(v.notification_type.as_deref(), Some("idle_prompt"));
+    }
+
+    #[test]
+    fn quota_is_read_from_rate_limits() {
+        let json = r#"{"model":{"id":"m"},"rate_limits":{
+            "five_hour":{"used_percentage":23.5,"resets_at":1738425600},
+            "seven_day":{"used_percentage":41,"resets_at":1738857600}}}"#;
+        assert_eq!(
+            parse_quota(json),
+            Some(Quota {
+                five_hour: Some(QuotaWindow {
+                    used_pct: 23.5,
+                    resets_at: 1_738_425_600
+                }),
+                seven_day: Some(QuotaWindow {
+                    used_pct: 41.0,
+                    resets_at: 1_738_857_600
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn quota_windows_are_independent_and_validated() {
+        let only_week = r#"{"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":9}}}"#;
+        let q = parse_quota(only_week).expect("quota");
+        assert_eq!(q.five_hour, None);
+        assert!(q.seven_day.is_some());
+        for bad in [
+            "",
+            "not json",
+            "{}",
+            r#"{"rate_limits":{}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":101,"resets_at":9}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":-1,"resets_at":9}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":"5","resets_at":9}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":0}}}"#,
+            r#"{"rate_limits":{"five_hour":{"used_percentage":5}}}"#,
+        ] {
+            assert_eq!(parse_quota(bad), None, "{bad}");
+        }
     }
 
     #[test]

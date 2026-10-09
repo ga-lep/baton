@@ -86,6 +86,7 @@ struct RawConfig {
     scrollback_lines: Option<usize>,
     hook_timeout_secs: Option<u64>,
     attach_redraw_nudge: Option<bool>,
+    statusline: Option<String>,
     #[serde(default)]
     profiles: BTreeMap<String, RawProfile>,
     #[serde(default)]
@@ -177,6 +178,9 @@ pub struct Config {
     pub hook_timeout_secs: u64,
     /// Whether attaching nudges sessions to redraw (resize to `cols-1` then `cols`).
     pub attach_redraw_nudge: bool,
+    /// The user's own status line command, run by `baton statusline` inside
+    /// sessions (Baton's status line replaces the one in Claude's settings).
+    pub statusline: Option<String>,
     /// Projects in file order.
     pub projects: Vec<Project>,
     /// Price table.
@@ -193,6 +197,7 @@ impl Default for Config {
             scrollback_lines: 10_000,
             hook_timeout_secs: 20,
             attach_redraw_nudge: true,
+            statusline: None,
             projects: Vec::new(),
             pricing: Pricing::default(),
             keybindings: Keymap::default(),
@@ -326,6 +331,7 @@ impl Config {
             attach_redraw_nudge: raw
                 .attach_redraw_nudge
                 .unwrap_or(defaults.attach_redraw_nudge),
+            statusline: raw.statusline.filter(|c| !c.trim().is_empty()),
             projects,
             pricing: raw.pricing,
             keybindings,

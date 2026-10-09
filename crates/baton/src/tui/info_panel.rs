@@ -2,7 +2,7 @@
 //! uptime, context, tokens, cost and ids of the selected session.
 
 use baton_core::transcript::sanitize_model;
-use baton_proto::SessionInfo;
+use baton_proto::{QuotaWindow, SessionInfo};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
@@ -44,6 +44,25 @@ pub fn context_bar(pct: f32) -> Option<String> {
         "{}{} {pct:.0}%",
         "█".repeat(filled),
         "░".repeat(BAR_CELLS - filled)
+    ))
+}
+
+/// Time left until `at`, such as `47m`, `2h13m` or `3d04h`; `None` once past.
+pub fn until(at: u64, now: u64) -> Option<String> {
+    let secs = at.checked_sub(now).filter(|s| *s > 0)?;
+    Some(match secs {
+        0..3600 => format!("{}m", secs.div_ceil(60)),
+        3600..86_400 => format!("{}h{:02}m", secs / 3600, secs % 3600 / 60),
+        _ => format!("{}d{:02}h", secs / 86_400, secs % 86_400 / 3600),
+    })
+}
+
+/// `██░░░░░░░░ 23% ↻2h13m` for a window that has not reset yet.
+pub fn quota_bar(w: &QuotaWindow, now: u64) -> Option<String> {
+    Some(format!(
+        "{} ↻{}",
+        context_bar(w.used_pct)?,
+        until(w.resets_at, now)?
     ))
 }
 
@@ -167,6 +186,24 @@ pub fn lines(
             .and_then(cost)
             .map_or_else(na, plain),
     ));
+    // Claude drops a window once it resets; so do we, until the next report.
+    for (label, window) in [
+        ("5h", s.quota.and_then(|q| q.five_hour)),
+        ("week", s.quota.and_then(|q| q.seven_day)),
+    ] {
+        let bar = window.and_then(|w| Some((quota_bar(&w, now)?, w.used_pct)));
+        out.push(row(
+            label,
+            bar.map_or_else(na, |(bar, pct)| {
+                let color = match pct {
+                    p if p >= 90.0 => Color::Red,
+                    p if p >= 75.0 => Color::Yellow,
+                    _ => Color::Reset,
+                };
+                Span::styled(bar, Style::default().fg(color))
+            }),
+        ));
+    }
     out.push(row(
         "id",
         s.claude_session_id
@@ -203,7 +240,7 @@ fn clip(s: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use baton_proto::{SessionId, Status, Usage};
+    use baton_proto::{Quota, SessionId, Status, Usage};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::widgets::{Block, Borders, Paragraph};
@@ -222,6 +259,7 @@ mod tests {
             exit_code: None,
             usage,
             launch: Some("resume".into()),
+            quota: None,
         }
     }
 
@@ -267,7 +305,7 @@ mod tests {
 
     #[test]
     fn full_state_matches_the_spec_layout() {
-        let out = render(&session(Some(full_usage())), 4320, 32, 14);
+        let out = render(&session(Some(full_usage())), 4320, 32, 16);
         for want in [
             "~/code/powerloop",
             "profile  work",
@@ -286,8 +324,52 @@ mod tests {
     }
 
     #[test]
+    fn quota_rows_show_bars_and_time_to_reset() {
+        let mut s = session(None);
+        s.quota = Some(Quota {
+            five_hour: Some(QuotaWindow {
+                used_pct: 23.0,
+                resets_at: 1000 + 2 * 3600 + 13 * 60,
+            }),
+            seven_day: Some(QuotaWindow {
+                used_pct: 91.0,
+                resets_at: 1000 + 3 * 86_400 + 4 * 3600,
+            }),
+        });
+        let out = render(&s, 1000, 40, 16);
+        assert!(out.contains("5h       ██░░░░░░░░ 23% ↻2h13m"), "{out}");
+        assert!(out.contains("week     █████████░ 91% ↻3d04h"), "{out}");
+    }
+
+    #[test]
+    fn missing_or_reset_quota_windows_show_n_a() {
+        let mut s = session(None);
+        assert!(render(&s, 0, 32, 16).contains("5h       n/a"));
+        s.quota = Some(Quota {
+            five_hour: Some(QuotaWindow {
+                used_pct: 50.0,
+                resets_at: 100,
+            }),
+            seven_day: None,
+        });
+        let out = render(&s, 100, 32, 16);
+        assert!(out.contains("5h       n/a"), "{out}");
+        assert!(out.contains("week     n/a"), "{out}");
+    }
+
+    #[test]
+    fn time_until_reset() {
+        assert_eq!(until(100, 100), None);
+        assert_eq!(until(100, 200), None);
+        assert_eq!(until(101, 100).as_deref(), Some("1m"));
+        assert_eq!(until(100 + 47 * 60, 100).as_deref(), Some("47m"));
+        assert_eq!(until(3600, 0).as_deref(), Some("1h00m"));
+        assert_eq!(until(86_400 + 3600, 0).as_deref(), Some("1d01h"));
+    }
+
+    #[test]
     fn unavailable_usage_shows_n_a_and_the_rest_still_renders() {
-        let out = render(&session(None), 5, 32, 14);
+        let out = render(&session(None), 5, 32, 16);
         for want in [
             "model    opus",
             "context  n/a",
@@ -305,7 +387,7 @@ mod tests {
     fn exited_sessions_show_the_exit_code() {
         let mut s = session(None);
         s.status = Status::Exited(3);
-        assert!(render(&s, 0, 32, 14).contains("status   exited 3"));
+        assert!(render(&s, 0, 32, 16).contains("status   exited 3"));
     }
 
     #[test]
@@ -315,7 +397,7 @@ mod tests {
             ..full_usage()
         }));
         s.repo = "/tmp/a\u{1b}]0;x\u{7}b".into();
-        let out = render(&s, 0, 40, 14);
+        let out = render(&s, 0, 40, 16);
         assert!(!out.contains('\u{1b}') && !out.contains('\u{202e}') && !out.contains('\u{7}'));
         assert!(out.contains("evil[2Jmodel"), "{out}");
     }

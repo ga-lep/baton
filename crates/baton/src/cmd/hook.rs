@@ -47,13 +47,18 @@ fn event_arg(args: &[OsString]) -> Option<&str> {
 fn forward(args: &[OsString]) -> Result<(), String> {
     let event = event_arg(args).ok_or("missing or unknown event")?;
     let session = std::env::var("BATON_SESSION").map_err(|_| "BATON_SESSION is not set")?;
-    let sock = std::env::var_os("BATON_SOCK").map_or_else(paths::socket_path, PathBuf::from);
     let payload_json = read_stdin();
-    let msg = ClientMsg::Hook {
+    send(ClientMsg::Hook {
         baton_session: SessionId(session),
         event: event.to_owned(),
         payload_json,
-    };
+    })
+}
+
+/// Sends `msg` to the daemon at `BATON_SOCK` (else the default socket) within
+/// [`CONNECT_DEADLINE`].
+pub fn send(msg: ClientMsg) -> Result<(), String> {
+    let sock = std::env::var_os("BATON_SOCK").map_or_else(paths::socket_path, PathBuf::from);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -64,7 +69,7 @@ fn forward(args: &[OsString]) -> Result<(), String> {
                 .await
                 .map_err(|e| e.to_string())?;
             // The daemon's handshake reply was awaited above so that it
-            // cannot see a closed socket before it reads the hook frame.
+            // cannot see a closed socket before it reads the frame.
             conn.send(&msg).await.map_err(|e| e.to_string())
         };
         tokio::time::timeout(CONNECT_DEADLINE, send)
@@ -76,7 +81,7 @@ fn forward(args: &[OsString]) -> Result<(), String> {
 /// Reads at most [`MAX_STDIN`] bytes of stdin, waiting at most
 /// [`STDIN_DEADLINE`]; returns an empty string on timeout. The reader thread
 /// is detached, so a stalled writer cannot keep the process alive.
-fn read_stdin() -> String {
+pub fn read_stdin() -> String {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut buf = Vec::new();
