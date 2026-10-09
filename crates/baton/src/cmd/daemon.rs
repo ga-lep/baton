@@ -2,7 +2,7 @@
 
 use crate::cli::DaemonAction;
 use crate::client::{self, ClientError};
-use crate::daemon::{self, Outcome};
+use crate::daemon::{self, Outcome, lifecycle};
 use baton_core::paths;
 use baton_proto::{ClientMsg, DaemonMsg, Role};
 use std::process::ExitCode;
@@ -98,7 +98,10 @@ async fn stop() -> anyhow::Result<u8> {
     drop(conn);
     let sock = paths::socket_path();
     let deadline = Instant::now() + STOP_TIMEOUT;
-    while sock.exists() {
+    // The socket goes first, the lock last: once the lock is free, a new
+    // daemon can start.
+    let run_dir = paths::runtime_dir();
+    while sock.exists() || lifecycle::acquire_lock(&run_dir)?.is_none() {
         if Instant::now() >= deadline {
             anyhow::bail!("daemon did not stop within {}s", STOP_TIMEOUT.as_secs());
         }

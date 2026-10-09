@@ -1,25 +1,27 @@
 # Baton
 
-Baton is a lazygit-style terminal UI (Linux only) for running several Claude
+Baton is a terminal UI (Linux only) for running several Claude
 Code sessions side by side. A background daemon owns one interactive `claude`
 session per configured repo, tracks each session's status, keeps sessions
 alive across TUI restarts, shows usage and estimated cost, and sends desktop
 notifications when a session needs attention. See [docs/SPEC.md](https://github.com/ga-lep/baton/blob/main/docs/SPEC.md)
 for details.
 
-## Install
+## Install or update
 
-1. Download the `x86_64-unknown-linux-musl` archive (recommended) from
-   [GitHub Releases](https://github.com/ga-lep/baton/releases), together with
-   its checksum file.
-2. Verify it, in the download directory, with either
-   `sha256sum -c baton-<tag>-x86_64-unknown-linux-musl.tar.gz.sha256` or
-   `sha256sum -c SHA256SUMS --ignore-missing`. Checksums prove the download
-   is intact, not who built it.
-3. Extract it and put `baton` on your `PATH`, for example in `~/.local/bin`.
+```sh
+(cd "$(mktemp -d)" && curl -fsSL --remote-name-all "https://github.com/ga-lep/baton/releases/latest/download/{baton-x86_64-unknown-linux-musl,SHA256SUMS}" && sha256sum -c --ignore-missing --quiet SHA256SUMS && install -Dm755 baton-x86_64-unknown-linux-musl ~/.local/bin/baton) && baton --version
+```
 
-See [docs/RELEASING.md](https://github.com/ga-lep/baton/blob/main/docs/RELEASING.md)
-for details.
+It downloads the latest static Linux x86_64 binary, checks it against the
+release's `SHA256SUMS`, and installs it as `~/.local/bin/baton` (make sure that
+directory is on your `PATH`). Run the same command again to update. A daemon
+that was already running keeps the old version until you run
+`baton daemon stop`; your sessions resume when you reopen `baton`.
+
+The checksum only proves the download is intact, not who built it. See
+[docs/RELEASING.md](https://github.com/ga-lep/baton/blob/main/docs/RELEASING.md)
+for the other build and manual steps.
 
 ## Updates
 

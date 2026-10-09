@@ -16,6 +16,8 @@ use tokio_util::sync::CancellationToken;
 
 /// Grace period between SIGHUP and SIGKILL for child process groups.
 const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+/// How long a starting daemon waits for the lock of one that is exiting.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Outcome of [`run_foreground`].
 #[derive(Debug, PartialEq, Eq)]
@@ -33,7 +35,8 @@ pub enum Outcome {
 pub fn run_foreground() -> Result<Outcome> {
     // Private-dir check comes first: nothing is bound in an untrusted directory.
     let run_dir = paths::ensure_runtime_dir().context("runtime dir")?;
-    let Some(lock) = lifecycle::acquire_lock(&run_dir).context("daemon lock")? else {
+    let Some(lock) = lifecycle::acquire_lock_within(&run_dir, LOCK_WAIT).context("daemon lock")?
+    else {
         return Ok(Outcome::AlreadyRunning);
     };
     // Private, user-owned and not a symlink, like the runtime dir: it holds

@@ -33,6 +33,25 @@ pub fn acquire_lock(run_dir: &Path) -> io::Result<Option<DaemonLock>> {
     }
 }
 
+/// Like [`acquire_lock`], but keeps trying for up to `wait` while the lock is
+/// held: a daemon that is shutting down releases it just after removing its
+/// socket, so a start racing a stop must not mistake it for a live daemon.
+///
+/// # Errors
+/// On I/O errors other than the lock being contended.
+pub fn acquire_lock_within(run_dir: &Path, wait: Duration) -> io::Result<Option<DaemonLock>> {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        if let Some(lock) = acquire_lock(run_dir)? {
+            return Ok(Some(lock));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 trait ModeExt {
     fn mode_0600(&mut self) -> &mut Self;
 }
@@ -105,6 +124,37 @@ mod tests {
         assert!(acquire_lock(t.path()).unwrap().is_none());
         drop(first);
         assert!(acquire_lock(t.path()).unwrap().is_some());
+    }
+
+    #[test]
+    fn waiting_for_the_lock_outlasts_a_daemon_that_is_exiting() {
+        let t = tempfile::tempdir().unwrap();
+        let first = acquire_lock(t.path()).unwrap().expect("first lock");
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(first);
+        });
+        let started = std::time::Instant::now();
+        assert!(
+            acquire_lock_within(t.path(), Duration::from_secs(2))
+                .unwrap()
+                .is_some()
+        );
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        releaser.join().unwrap();
+    }
+
+    #[test]
+    fn waiting_for_a_lock_that_stays_held_gives_up() {
+        let t = tempfile::tempdir().unwrap();
+        let _held = acquire_lock(t.path()).unwrap().expect("first lock");
+        let started = std::time::Instant::now();
+        assert!(
+            acquire_lock_within(t.path(), Duration::from_millis(150))
+                .unwrap()
+                .is_none()
+        );
+        assert!(started.elapsed() >= Duration::from_millis(150));
     }
 
     #[tokio::test]

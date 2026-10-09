@@ -112,18 +112,14 @@ jobs:
       - name: Package
         env:
           TARGET: ${{ matrix.target }}
-          REF: ${{ github.ref }}
-          REF_NAME: ${{ github.ref_name }}
-          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ "$REF" == refs/tags/v* ]]; then id="$REF_NAME"; else id="${SHA::12}"; fi
-          name="baton-$id-$TARGET"
-          mkdir -p "out/$name"
-          cp "target/$TARGET/release/baton" LICENSE README.md "out/$name/"
+          # No version in the name, so releases/latest/download/<name> always
+          # points at the newest binary (the README's install command uses it).
+          name="baton-$TARGET"
           mkdir -p dist
-          tar -C out -czf "dist/$name.tar.gz" "$name"
-          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          install -m 755 "target/$TARGET/release/baton" "dist/$name"
+          (cd dist && sha256sum "$name" > "$name.sha256")
           ls -l dist
       - name: Upload artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -151,15 +147,12 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          archives=$(find . -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
-          sums=$(find . -maxdepth 1 -type f -name '*.tar.gz.sha256' | wc -l)
-          total=$(find . -type f | wc -l)
-          if [[ "$archives" != 2 || "$sums" != 2 || "$total" != 4 ]]; then
-            echo "::error::unexpected dist contents"
-            ls -lR .
-            exit 1
-          fi
-          sha256sum -- *.tar.gz > SHA256SUMS
+          bins=(baton-x86_64-unknown-linux-musl baton-x86_64-unknown-linux-gnu)
+          for b in "${bins[@]}"; do
+            [[ -f "$b" && -f "$b.sha256" ]] || { echo "::error::missing $b or $b.sha256"; ls -lR .; exit 1; }
+          done
+          [[ $(find . -type f | wc -l) == 4 ]] || { echo "::error::unexpected dist contents"; ls -lR .; exit 1; }
+          sha256sum -- "${bins[@]}" > SHA256SUMS
           cat SHA256SUMS
           [[ $(find . -type f | wc -l) == 5 ]] || { echo "::error::dist must hold exactly 5 files"; exit 1; }
       - name: Create release

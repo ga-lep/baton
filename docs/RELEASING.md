@@ -24,8 +24,8 @@ compares the two exactly. The jobs run in this order:
 2. `verify`: fails unless the tag minus its leading `v` equals the workspace
    version (read with `cargo metadata --no-deps --format-version 1`).
 3. `build`: builds `x86_64-unknown-linux-musl` and `x86_64-unknown-linux-gnu`,
-   smoke-tests each binary (`--version` and `baton version`) and uploads the
-   archives. For musl the smoke test also requires `file` to report
+   smoke-tests each binary (`--version` and `baton version`) and uploads it
+   with its checksum as `baton-<target>`. For musl the smoke test also requires `file` to report
    `statically linked` or `static-pie linked`, and `readelf` to show no
    `INTERP` program header and no `NEEDED` entries.
 4. `publish`: tag refs only, the only job with `contents: write`. It writes
@@ -38,47 +38,51 @@ artifacts but never publishes, and it skips the tag comparison.
 
 ## Artifacts
 
-Each release contains, per target:
+Each release contains, per target, the bare executable and its checksum:
 
-- `baton-<tag>-<target>.tar.gz`, holding one directory
-  `baton-<tag>-<target>/` with `baton`, `LICENSE` and `README.md`;
-- `baton-<tag>-<target>.tar.gz.sha256`, in `sha256sum` format.
+- `baton-<target>`, the `baton` binary;
+- `baton-<target>.sha256`, in `sha256sum` format.
 
-It also contains one `SHA256SUMS` file covering all archives.
+It also contains one `SHA256SUMS` file covering both binaries. The names carry
+no version, so `https://github.com/ga-lep/baton/releases/latest/download/<name>`
+always serves the newest release.
 
-Which archive to pick:
+Which binary to pick:
 
-- `x86_64-unknown-linux-musl` is recommended. It is statically linked and runs
-  on any x86_64 Linux.
-- `x86_64-unknown-linux-gnu` is dynamically linked and needs glibc 2.39 or
-  newer.
+- `baton-x86_64-unknown-linux-musl` is recommended. It is statically linked and
+  runs on any x86_64 Linux.
+- `baton-x86_64-unknown-linux-gnu` is dynamically linked and needs glibc 2.39
+  or newer.
 
-No aarch64 build is provided.
+No aarch64 build is provided. Releases up to v0.2.0 shipped
+`baton-<tag>-<target>.tar.gz` archives instead.
 
 ## Verifying a download
 
-Download the archive and `SHA256SUMS` (or the archive's own `.sha256`) into the
+Download the binary and `SHA256SUMS` (or the binary's own `.sha256`) into the
 same directory, then run one of:
 
 ```
 sha256sum -c SHA256SUMS --ignore-missing
-sha256sum -c baton-<tag>-<target>.tar.gz.sha256
+sha256sum -c baton-<target>.sha256
 ```
 
 Note that the checksums prove integrity only (the download was not corrupted).
-They come from the same release as the archives, so they do not prove
-authenticity: anyone able to replace an archive could replace its checksum too.
+They come from the same release as the binaries, so they do not prove
+authenticity: anyone able to replace a binary could replace its checksum too.
 
 ## Installing
 
+The README has a one-line command that installs or updates the musl build.
+By hand:
+
 ```
-tar xzf baton-<tag>-x86_64-unknown-linux-musl.tar.gz
-mkdir -p ~/.local/bin
-install -m 755 baton-<tag>-x86_64-unknown-linux-musl/baton ~/.local/bin/baton
+install -Dm755 baton-x86_64-unknown-linux-musl ~/.local/bin/baton
 baton --version
 ```
 
-Make sure `~/.local/bin` is on your `PATH`.
+`install` replaces the file rather than writing into it, so it also works while
+an older `baton` is running. Make sure `~/.local/bin` is on your `PATH`.
 
 ## Update check
 
@@ -94,4 +98,4 @@ the TUI shows nothing, the same as when offline.
 
 ## License
 
-Baton is MIT licensed. `LICENSE` and `README.md` ship in every archive.
+Baton is MIT licensed. See `LICENSE` in the repository.

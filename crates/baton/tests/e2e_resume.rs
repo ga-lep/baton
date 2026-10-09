@@ -424,3 +424,23 @@ fn a_failed_resume_keeps_the_stored_id_until_session_start_replaces_it() -> Resu
     .context("state.json lost the stored id")?;
     Ok(())
 }
+
+/// `daemon stop` returns only once the old daemon released its lock, so a
+/// daemon started right after it can always take over (a reopen straight
+/// after a stop used to fail with "daemon is not running").
+#[test]
+fn stop_returns_after_the_daemon_lock_is_released() -> Result<()> {
+    use nix::fcntl::{Flock, FlockArg};
+    let env = Env::new()?;
+    for _ in 0..3 {
+        env.ok(&["debug", "open", "x"])?;
+        env.wait_idle()?;
+        env.stop()?;
+        let lock = std::fs::File::open(env.p("run/baton.lock"))?;
+        assert!(
+            Flock::lock(lock, FlockArg::LockExclusiveNonblock).is_ok(),
+            "daemon lock still held after `daemon stop` returned"
+        );
+    }
+    Ok(())
+}
