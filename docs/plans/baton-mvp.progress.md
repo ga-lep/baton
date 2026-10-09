@@ -70,3 +70,4 @@ Task 18: started
 Task 18: complete (25cec55..535a0e9, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-18.md
   notes: M6 reached. Alt-n now focus-mode only (n in normal), per spec; bad keybindings fail the whole config load (TUI notice + defaults); only unfocus checked vs plain printable keys; [sec Low] relative repo path starting with '-' read as editor option — require absolute repo paths; [sec Low] editor program resolved after chdir into repo (relative program / '.' in PATH) — resolve against parent PATH first; [sec Info] Cf chars accepted as key specs; [review] e2e_keys not run red first
+Task 19: started
