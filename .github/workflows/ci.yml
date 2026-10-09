@@ -29,7 +29,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install toolchain
-        run: rustup show
+        run: |
+          rustup toolchain install
+          rustup show
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo fmt
