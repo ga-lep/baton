@@ -1,4 +1,8 @@
 # Evidence — Task 7: Release workflow, release profile, 0.2.0, RELEASING.md
+
+Overall status: FAILED (run 2: musl static check in release.yml fails; see "Run 2" at the end). Run 1 below is kept as history.
+
+# Run 1 (commit eb0d80e) — FAILED (CI gate red)
 Commit: eb0d80e
 Environment: branch pushed to origin (approved), PR #4 runs. Release run 37944050806, CI run 37944049553. Local: cargo release build; actionlint via docker rhysd/actionlint:latest.
 
@@ -85,3 +89,85 @@ Status: PROVEN (read): sections "Cutting a release", "Artifacts" (archive choice
 ## Pending, user decision (not failures)
 - After merge and tag v0.2.0: real release, `SHA256SUMS`, installed binary.
 - Once the repo is public: `baton version --check` says up to date.
+
+
+---
+
+# Run 2 (commit f767110) — FAILED (1 criterion)
+Commit: f767110
+Environment: pushed `feat/ci-release-update-check` to origin (approved; first push attempt hit a transient error, second succeeded). CI run 37945715746 and Release run 37945716125 on PR #4. glibc local: Ubuntu GLIBC 2.39. No tag, no merge, no ready-mark, no workflow_dispatch.
+
+## actionlint reports no errors
+Status: PROVEN
+```console
+$ docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest; echo "actionlint exit=$?"
+actionlint exit=0
+```
+
+## CI workflow run is green (previous failure fixed)
+Status: PROVEN
+```console
+$ gh run watch 37945715746 --repo ga-lep/baton --exit-status; echo $?
+0
+$ gh run view 37945715746 --repo ga-lep/baton --log | grep 'test result' | sed -n '1p;15p;16p'
+gate	cargo test	... test result: ok. 171 passed; 0 failed; ...
+gate	cargo test	... test result: ok. 18 passed; 0 failed; ... (e2e_version)
+gate	cargo test	... test result: ok. 118 passed; 0 failed; ...
+```
+All `test result` lines are `ok` with 0 failed (e2e_version: 18 passed).
+
+## Release run on PR: gate -> verify -> build -> publish order, gate green, verify prints version without comparing, publish skipped
+Status: PROVEN for gate/verify/publish; build see below
+```console
+$ gh run view 37945716125 --repo ga-lep/baton   (trimmed)
+✓ gate / gate in 1m37s
+✓ verify in 57s
+X build (x86_64-unknown-linux-musl) in 2m1s
+✓ build (x86_64-unknown-linux-gnu) in 1m51s
+- publish in 0s
+$ grep -E 'Workspace version|Build-only' rel.log
+verify  Check tag against workspace version  Workspace version: 0.2.0
+verify  Check tag against workspace version  Build-only mode: skipping tag comparison.
+```
+Gate (same test counts as CI run: 171, 18, 118 ... all ok) passed, verify printed 0.2.0 and skipped the comparison, publish was skipped.
+
+## build: cargo build --locked per target, smoke tests, matrix exactly musl+gnu
+Status: PROVEN for gnu; FAILED for musl
+```console
+build (x86_64-unknown-linux-gnu)	Smoke test	baton 0.2.0
+build (x86_64-unknown-linux-gnu)	Smoke test	baton 0.2.0 (protocol 6)
+build (x86_64-unknown-linux-musl)	Smoke test	baton 0.2.0
+build (x86_64-unknown-linux-musl)	Smoke test	baton 0.2.0 (protocol 6)
+build (x86_64-unknown-linux-musl)	Smoke test	target/x86_64-unknown-linux-musl/release/baton: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, BuildID[sha1]=d08f4cca24d574169222285cb188a6d771bb2b3e, stripped
+build (x86_64-unknown-linux-musl)	Smoke test	##[error]binary is not statically linked
+```
+Both legs: `--version` exactly `baton 0.2.0` and `BATON_NO_UPDATE_CHECK=1 baton version` OK. The musl leg FAILED the "file reports `statically linked`" assertion: `file` on this runner prints `static-pie linked` for the (genuinely static) musl PIE binary, and the workflow's `grep -q 'statically linked'` does not match that wording. So Package and Upload were skipped for musl. This is a workflow bug (assertion too narrow), not a non-static binary. Not fixed here; suggested fix direction: match `statically linked|static-pie linked`.
+
+## Archive layout, .sha256, artifacts
+Status: PROVEN for gnu only; musl NOT PROVEN (no musl artifact was produced because of the failure above)
+```console
+$ gh run download 37945716125 --repo ga-lep/baton -D $D/art ; find $D/art -type f
+.../art/baton-x86_64-unknown-linux-gnu/baton-fd7f5f3ce6b7-x86_64-unknown-linux-gnu.tar.gz
+.../art/baton-x86_64-unknown-linux-gnu/baton-fd7f5f3ce6b7-x86_64-unknown-linux-gnu.tar.gz.sha256
+$ sha256sum -c *.sha256
+baton-fd7f5f3ce6b7-x86_64-unknown-linux-gnu.tar.gz: OK
+$ tar tzf *.tar.gz
+baton-fd7f5f3ce6b7-x86_64-unknown-linux-gnu/
+baton-fd7f5f3ce6b7-x86_64-unknown-linux-gnu/baton
+baton-fd7f5f3ce6b7-x86_64-unknown-linux-gnu/LICENSE
+baton-fd7f5f3ce6b7-x86_64-unknown-linux-gnu/README.md
+$ ./baton-*/baton --version
+baton 0.2.0
+$ ldd --version | head -1
+ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39
+```
+Name is `baton-<12-char sha>-<target>` for non-tag runs; one top-level dir with the three files. Musl archive extraction, `sha256sum -c` for it, and local `file` on the musl binary could not be done (no artifact).
+
+## Version, Cargo.lock, triggers, permissions, profile, publish script, RELEASING.md
+Status: PROVEN statically (unchanged from Run 1 for version/lock/profile; release.yml re-read at f767110: triggers, `permissions: contents: read`, only `publish` has `contents: write` and runs on `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')`, no third-party release action, `gh release create ... --verify-tag`). The publish job itself was skipped, so its SHA256SUMS step and release creation were not exercised. `docs/RELEASING.md` content was not re-reviewed in this run.
+
+## verify failing on a tag mismatch; publish creating a release; "after merge and tag v0.2.0"; `version --check` up to date once a release exists
+Status: PENDING (user decision; requires pushing a tag, which was forbidden). Not failures.
+
+## Run 2 verdict
+FAILED (1 criterion): musl static-link assertion in build rejects `static-pie linked`.
