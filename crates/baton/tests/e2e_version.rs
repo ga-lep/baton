@@ -6,6 +6,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const VER: &str = env!("CARGO_PKG_VERSION");
+const URL: &str = "https://github.com/ga-lep/baton/releases/tag/v99.0.0";
 
 struct Env {
     dir: tempfile::TempDir,
@@ -47,7 +48,7 @@ fn stdout(o: &Output) -> String {
 }
 
 fn release(tag: &str) -> String {
-    format!(r#"{{"tag_name":"{tag}","html_url":"http://x/r","name":"ignored"}}"#)
+    format!(r#"{{"tag_name":"{tag}","html_url":"{URL}","name":"ignored"}}"#)
 }
 
 #[test]
@@ -79,7 +80,7 @@ fn check_reports_available_update_and_writes_cache() -> Result<()> {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(
         stdout(&out),
-        format!("baton 99.0.0 is available (you have {VER}): http://x/r\n")
+        format!("baton 99.0.0 is available (you have {VER}): {URL}\n")
     );
     let cache = env.cache()?;
     assert_eq!(cache["ok"], true);
@@ -224,5 +225,71 @@ fn oversized_body_is_rejected() -> Result<()> {
     let out = env.run(&srv.url(), &["--check"], &[])?;
     assert_eq!(out.status.code(), Some(1));
     assert!(stdout(&out).starts_with("could not check for updates: "));
+    Ok(())
+}
+
+#[test]
+fn state_dir_and_cache_are_private_and_doctor_passes() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let env = Env::new()?;
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0")?;
+        l.local_addr()?.port()
+    };
+    let url = format!("http://127.0.0.1:{port}/x");
+    let bin = bin_path("baton")?;
+    let run = |sub: &[&str]| -> Result<Output> {
+        Ok(Command::new("sh")
+            .args([
+                "-c",
+                "umask 022; exec \"$0\" \"$@\"",
+                &bin.display().to_string(),
+            ])
+            .args(sub)
+            .env("BATON_CONFIG", env.dir.path().join("config.toml"))
+            .env("BATON_STATE_DIR", env.dir.path().join("state"))
+            .env("BATON_RUNTIME_DIR", env.dir.path().join("run"))
+            .env("BATON_UPDATE_URL", &url)
+            .stdin(Stdio::null())
+            .output()?)
+    };
+    let out = run(&["version", "--check"])?;
+    assert_eq!(out.status.code(), Some(1));
+    let mode = |p: std::path::PathBuf| -> Result<u32> {
+        Ok(std::fs::metadata(p)?.permissions().mode() & 0o777)
+    };
+    assert_eq!(mode(env.dir.path().join("state"))?, 0o700);
+    assert_eq!(mode(env.cache_path())?, 0o600);
+    let left: Vec<_> = std::fs::read_dir(env.dir.path().join("state"))?.collect();
+    assert_eq!(left.len(), 1, "no temp files left: {left:?}");
+    let doc = run(&["doctor", "--no-probe"])?;
+    let text = stdout(&doc);
+    assert!(text.contains("PASS dirs"), "{text}");
+    assert!(!text.contains("FAIL dirs"), "{text}");
+    Ok(())
+}
+
+#[test]
+fn hostile_server_data_never_reaches_the_terminal() -> Result<()> {
+    let env = Env::new()?;
+    // Valid tag, hostile URL.
+    let body =
+        r#"{"tag_name":"v99.0.0","html_url":"https://github.com/\u001b]8;;https://evil\u0007x"}"#;
+    let srv = ReleaseServer::start(Reply::ok(body))?;
+    let out = env.run(&srv.url(), &["--check"], &[])?;
+    let text = stdout(&out);
+    assert!(!text.contains('\x1b') && !text.contains('\x07'), "{text:?}");
+    assert!(text.contains("99.0.0 is available"), "{text:?}");
+    let cached = std::fs::read_to_string(env.cache_path())?;
+    assert!(!cached.contains("evil"), "{cached}");
+
+    // Hostile tag.
+    let env = Env::new()?;
+    let body = r#"{"tag_name":"\u001b[2J\u001b]0;pwn\u0007","html_url":"http://x/r"}"#;
+    let srv = ReleaseServer::start(Reply::ok(body))?;
+    let out = env.run(&srv.url(), &["--check"], &[])?;
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!text.contains('\x1b') && !text.contains('\x07'), "{text:?}");
     Ok(())
 }

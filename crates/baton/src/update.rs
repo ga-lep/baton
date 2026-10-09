@@ -46,6 +46,8 @@ pub struct Checked {
 pub fn fetch(url: &str, timeout: Duration, etag: Option<&str>) -> Result<Fetched, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
+        .https_only(https_only(url))
+        .max_redirects(3)
         .http_status_as_error(false)
         .build()
         .into();
@@ -69,7 +71,7 @@ pub fn fetch(url: &str, timeout: Duration, etag: Option<&str>) -> Result<Fetched
         .headers()
         .get("etag")
         .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+        .and_then(baton_core::update::sanitize_etag);
     let mut body = String::new();
     resp.body_mut()
         .as_reader()
@@ -84,6 +86,15 @@ pub fn fetch(url: &str, timeout: Duration, etag: Option<&str>) -> Result<Fetched
         tag: release.tag_name,
         html_url: release.html_url,
         etag,
+    })
+}
+
+/// Whether `url` must be https: always, except for plain-http loopback
+/// endpoints (`127.0.0.1` / `localhost`, optionally with a port), used by tests.
+fn https_only(url: &str) -> bool {
+    ["http://127.0.0.1", "http://localhost"].iter().all(|p| {
+        url.strip_prefix(p)
+            .is_none_or(|rest| !(rest.is_empty() || rest.starts_with([':', '/'])))
     })
 }
 
@@ -113,6 +124,9 @@ fn from_cache(cache: &Cache) -> Result<Checked, String> {
 /// A one-line, user-readable reason.
 pub fn check(force: bool, timeout: Duration) -> Result<Checked, String> {
     let path = paths::update_cache_path().map_err(|e| format!("no state dir: {e}"))?;
+    // Create/validate the state dir like the daemon does; if it is unusable
+    // the cache is simply not written.
+    let dir_ok = paths::ensure_state_dir().is_ok();
     let now = now_secs();
     let cached = Cache::load(&path);
     if !force && let Some(c) = cached.as_ref().filter(|c| c.is_fresh(now)) {
@@ -153,19 +167,41 @@ pub fn check(force: bool, timeout: Duration) -> Result<Checked, String> {
     });
     match result {
         Ok(cache) => {
-            let _ = cache.store(&path);
+            if dir_ok {
+                let _ = cache.store(&path);
+            }
             from_cache(&cache)
         }
         Err(reason) => {
-            let _ = Cache {
-                checked_at: now,
-                latest: None,
-                html_url: None,
-                etag: None,
-                ok: false,
+            if dir_ok {
+                let _ = Cache {
+                    checked_at: now,
+                    latest: None,
+                    html_url: None,
+                    etag: None,
+                    ok: false,
+                }
+                .store(&path);
             }
-            .store(&path);
             Err(reason)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn https_policy() {
+        assert!(https_only("https://api.github.com/x"));
+        assert!(https_only("http://example.com/x"));
+        assert!(https_only("http://127.0.0.1.evil.com/x"));
+        assert!(https_only("http://localhost.evil.com/x"));
+        assert!(https_only("http://user@127.0.0.1/x"));
+        assert!(!https_only("http://127.0.0.1:8080/x"));
+        assert!(!https_only("http://127.0.0.1/x"));
+        assert!(!https_only("http://localhost:1/x"));
+        assert!(!https_only("http://localhost"));
     }
 }
