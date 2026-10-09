@@ -37,6 +37,8 @@ impl Env {
             .env("BATON_STATE_DIR", self.dir.path().join("state"))
             .env("BATON_RUNTIME_DIR", self.run_dir())
             .env("BATON_NOTIFY_SINK", "off")
+            .env("BATON_NO_UPDATE_CHECK", "1")
+            .env_remove("BATON_UPDATE_URL")
             .stdin(std::process::Stdio::null())
             .output()?)
     }

@@ -1,5 +1,6 @@
 //! Puts the host terminal into TUI mode and reliably puts it back.
 
+use std::cell::Cell;
 use std::io::{self, Write};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -30,10 +31,28 @@ fn install_panic_hook() {
         HOOK_INSTALLS.fetch_add(1, Ordering::SeqCst);
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            restore();
+            if hook_should_restore() {
+                restore();
+            }
             previous(info);
         }));
     });
+}
+
+/// Whether a panic on the current thread should restore the terminal.
+pub(crate) fn hook_should_restore() -> bool {
+    !EXEMPT.with(Cell::get)
+}
+
+thread_local! {
+    /// Set on helper threads whose panics must not touch the terminal.
+    static EXEMPT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Exempts the calling thread from the terminal-restoring panic hook: a
+/// panic in a detached helper thread must not tear down the running TUI.
+pub(crate) fn exempt_current_thread() {
+    EXEMPT.with(|e| e.set(true));
 }
 
 /// Undo everything [`TerminalGuard::enter`] did. Safe to call repeatedly.

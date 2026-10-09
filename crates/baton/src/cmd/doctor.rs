@@ -8,9 +8,11 @@
 
 use crate::client::{self, ClientError};
 use crate::daemon::spawn::build_command;
+use crate::update::{self, Reason};
 use baton_core::config::{Config, SessionSpec};
 use baton_core::hooks::shell_quote;
 use baton_core::paths;
+use baton_core::update::Outcome;
 use baton_proto::{PROTOCOL_VERSION, Role, SessionId};
 use portable_pty::{Child, MasterPty, PtySize, native_pty_system};
 use serde_json::{Value, json};
@@ -96,6 +98,7 @@ pub fn run(no_probe: bool) -> ExitCode {
         }
     }
     check_notify(&mut report);
+    check_version(&mut report);
     if report.failed {
         ExitCode::FAILURE
     } else {
@@ -248,7 +251,7 @@ fn check_command(report: &mut Report, spec: &SessionSpec) -> bool {
 /// Removes control characters and caps the length.
 fn sanitize(s: &str) -> String {
     s.chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !baton_core::update::is_unsafe_char(*c))
         .take(MAX_PRINT_CHARS)
         .collect()
 }
@@ -466,6 +469,53 @@ fn check_notify(report: &mut Report) {
     }
 }
 
+/// Reports the running version against the latest release. Never `FAIL`:
+/// an offline machine or a private repo must not change doctor's exit code.
+fn check_version(report: &mut Report) {
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    if !baton_core::update::enabled(crate::cmd::version::config_flag(), &|k| {
+        std::env::var(k).ok()
+    }) {
+        report.emit(
+            Level::Pass,
+            format!("version: {VERSION} (update check disabled)"),
+        );
+        return;
+    }
+    match update::check(false, update::CLI_TIMEOUT) {
+        Ok(checked) => match checked.outcome {
+            Outcome::UpToDate => {
+                report.emit(Level::Pass, format!("version: {VERSION} (latest)"));
+            }
+            Outcome::Newer { latest } => report.emit(
+                Level::Warn,
+                format!(
+                    "version: {}",
+                    update::describe_newer(
+                        &sanitize(&latest),
+                        VERSION,
+                        checked.html_url.as_deref().map(sanitize).as_deref()
+                    )
+                ),
+            ),
+            Outcome::Unknown(why) => report.emit(
+                Level::Warn,
+                format!(
+                    "version: {}",
+                    update::describe_failure(&sanitize(&why), Reason::Parens)
+                ),
+            ),
+        },
+        Err(why) => report.emit(
+            Level::Warn,
+            format!(
+                "version: {}",
+                update::describe_failure(&sanitize(&why), Reason::Parens)
+            ),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +523,7 @@ mod tests {
     #[test]
     fn sanitize_strips_control_characters_and_caps_length() {
         assert_eq!(sanitize("2.1\x1b[31m.295\r\u{7}"), "2.1[31m.295");
+        assert_eq!(sanitize("a\u{85}b\u{202e}c\u{200b}d\u{feff}"), "abcd");
         assert_eq!(sanitize(&"a".repeat(1000)).len(), MAX_PRINT_CHARS);
     }
 

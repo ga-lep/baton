@@ -174,6 +174,14 @@ pub fn log_path() -> io::Result<PathBuf> {
     Ok(state_dir()?.join("daemon.log"))
 }
 
+/// Update-check cache: `<state_dir>/update-check.json`.
+///
+/// # Errors
+/// If the home directory cannot be determined.
+pub fn update_cache_path() -> io::Result<PathBuf> {
+    Ok(state_dir()?.join("update-check.json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +306,15 @@ mod tests {
         assert_eq!(
             runtime_dir_with(&env(&[]), 1000),
             PathBuf::from("/tmp/baton-1000")
+        );
+    }
+
+    #[test]
+    fn update_cache_lives_in_state_dir() {
+        // Uses the process env; compare with state_dir() so it is env-agnostic.
+        assert_eq!(
+            update_cache_path().unwrap(),
+            state_dir().unwrap().join("update-check.json")
         );
     }
 }

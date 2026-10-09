@@ -9,6 +9,7 @@ use futures_util::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
+use tokio::sync::oneshot::Receiver;
 
 use super::app::{App, Effect};
 use super::terminal_guard::TerminalGuard;
@@ -140,10 +141,12 @@ pub async fn run() -> Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let mut app = App::new(host_rect(&terminal)?);
     let mut conn = None;
+    let startup = crate::update::startup();
+    app.update_available = startup.available;
     let result = match link(first, app.size()).await {
         Ok(l) => {
             settle(l, &mut app, &mut conn);
-            drive(&mut app, &mut conn, &mut terminal).await
+            drive(&mut app, &mut conn, &mut terminal, startup.pending).await
         }
         Err(e) => Err(e),
     };
@@ -152,7 +155,21 @@ pub async fn run() -> Result<()> {
     result
 }
 
-async fn drive(app: &mut App, conn: &mut Option<Conn>, terminal: &mut Term) -> Result<()> {
+/// Awaits the background update check, or never completes when there is none.
+async fn update_result(rx: &mut Option<Receiver<Option<String>>>) -> Option<String> {
+    match rx {
+        // A dropped sender (thread died) counts as "nothing found".
+        Some(r) => r.await.unwrap_or(None),
+        None => std::future::pending().await,
+    }
+}
+
+async fn drive(
+    app: &mut App,
+    conn: &mut Option<Conn>,
+    terminal: &mut Term,
+    mut update_rx: Option<Receiver<Option<String>>>,
+) -> Result<()> {
     let mut events = EventStream::new();
     // When the branches were last read, and for how many sessions (a new
     // session gets its branch at once rather than at the next poll).
@@ -185,6 +202,14 @@ async fn drive(app: &mut App, conn: &mut Option<Conn>, terminal: &mut Term) -> R
                     app.on_disconnected();
                     Vec::new()
                 }
+            },
+            found = update_result(&mut update_rx) => {
+                update_rx = None;
+                if found.is_some() {
+                    app.update_available = found;
+                    app.pacer.mark_dirty();
+                }
+                Vec::new()
             },
             () = tokio::time::sleep(wait) => Vec::new(),
         };

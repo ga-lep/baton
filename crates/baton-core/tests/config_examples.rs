@@ -243,3 +243,21 @@ fn statusline_is_optional_and_blank_means_none() {
     let c = parse("statusline = \"~/bin/line.sh --short\"").expect("parses");
     assert_eq!(c.statusline.as_deref(), Some("~/bin/line.sh --short"));
 }
+
+#[test]
+fn update_check_defaults_on_and_can_be_disabled() {
+    assert!(parse("").expect("empty").update_check);
+    let c = parse("update_check = false").expect("parses");
+    assert!(!c.update_check);
+}
+
+#[test]
+fn update_check_must_be_a_bool() {
+    let e = parse("update_check = \"yes\"").expect_err("not a bool");
+    assert!(e.to_string().contains("update_check"), "{e}");
+}
+
+#[test]
+fn unknown_top_level_key_still_rejected() {
+    assert!(parse("update_chek = true").is_err());
+}

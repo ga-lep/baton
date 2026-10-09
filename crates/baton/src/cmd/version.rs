@@ -1,0 +1,62 @@
+//! `baton version [--check]`.
+
+use crate::update::{self, Checked, Reason};
+use baton_core::config::Config;
+use baton_core::paths;
+use baton_core::update::Outcome;
+use baton_proto::PROTOCOL_VERSION;
+use std::process::ExitCode;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// One-line message for a completed check.
+pub fn render(checked: &Checked) -> String {
+    match &checked.outcome {
+        Outcome::UpToDate => format!("baton {VERSION} is up to date"),
+        Outcome::Newer { latest } => format!(
+            "baton {}",
+            update::describe_newer(latest, VERSION, checked.html_url.as_deref())
+        ),
+        Outcome::Unknown(why) => update::describe_failure(why, Reason::Colon),
+    }
+}
+
+/// Whether the config allows automatic checks. A missing config file means
+/// yes; a config that exists but cannot be loaded means no, so a typo never
+/// turns an opt-out into an opt-in.
+pub(crate) fn config_flag() -> bool {
+    let getenv = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    paths::config_file()
+        .ok()
+        .and_then(|p| Config::load(&p, &getenv).ok())
+        .is_some_and(|c| c.update_check)
+}
+
+/// Runs `baton version`; with `check`, queries GitHub and exits 1 on failure.
+pub fn run(check: bool) -> ExitCode {
+    if !check {
+        println!("baton {VERSION} (protocol {PROTOCOL_VERSION})");
+        return ExitCode::SUCCESS;
+    }
+    let result = update::check(true, update::CLI_TIMEOUT);
+    let disabled = !baton_core::update::enabled(config_flag(), &|k| std::env::var(k).ok());
+    let note = if disabled {
+        " (automatic checks are disabled)"
+    } else {
+        ""
+    };
+    match result {
+        Ok(checked) if matches!(checked.outcome, Outcome::Unknown(_)) => {
+            println!("{}{note}", render(&checked));
+            ExitCode::FAILURE
+        }
+        Ok(checked) => {
+            println!("{}{note}", render(&checked));
+            ExitCode::SUCCESS
+        }
+        Err(reason) => {
+            println!("{}{note}", update::describe_failure(&reason, Reason::Colon));
+            ExitCode::FAILURE
+        }
+    }
+}
