@@ -232,3 +232,14 @@ fn attach_redraw_nudge_defaults_on_and_can_be_disabled() {
     let c = parse("attach_redraw_nudge = false").expect("parses");
     assert!(!c.attach_redraw_nudge);
 }
+
+#[test]
+fn statusline_is_optional_and_blank_means_none() {
+    assert_eq!(parse("").expect("empty").statusline, None);
+    assert_eq!(
+        parse("statusline = \"  \"").expect("blank").statusline,
+        None
+    );
+    let c = parse("statusline = \"~/bin/line.sh --short\"").expect("parses");
+    assert_eq!(c.statusline.as_deref(), Some("~/bin/line.sh --short"));
+}

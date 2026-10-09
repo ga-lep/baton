@@ -14,7 +14,7 @@ use baton_core::notify_rule::{self, ClientView};
 use baton_core::pricing::Pricing;
 use baton_core::state::PersistedSession;
 use baton_core::status::{self, Input};
-use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status, Usage};
+use baton_proto::{DaemonMsg, Quota, SessionId, SessionInfo, Status, Usage};
 use nix::unistd::Pid;
 use portable_pty::PtySize;
 use std::io::{Read, Write};
@@ -68,6 +68,8 @@ pub enum Cmd {
     MarkViewed,
     /// The transcript tailer's latest result (`None`: unreadable, shown as `n/a`).
     Usage(Option<Usage>),
+    /// The account's subscription quota, reported by this or a sibling session.
+    Quota(Quota),
 }
 
 /// The attached client's outgoing queue plus the switch that makes its
@@ -204,6 +206,7 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         exit_code: None,
         usage: None,
         launch: Some(rung.label().to_owned()),
+        quota: None,
     }));
     let task = Task {
         id: l.id.clone(),
@@ -446,6 +449,13 @@ impl Task {
                 self.forward(DaemonMsg::UsageUpdated {
                     session: self.id.clone(),
                     usage,
+                });
+            }
+            Cmd::Quota(quota) => {
+                self.info.lock().unwrap_or_else(|e| e.into_inner()).quota = Some(quota);
+                self.forward(DaemonMsg::QuotaUpdated {
+                    session: self.id.clone(),
+                    quota,
                 });
             }
             Cmd::Exited { .. } | Cmd::Restart => {} // handled in `run`

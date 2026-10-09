@@ -262,6 +262,14 @@ async fn handle(stream: UnixStream, shutdown: &CancellationToken, state: &State)
                 state.registry.hook(&baton_session, &event, &payload_json);
                 None
             }
+            ClientMsg::StatusLine {
+                baton_session,
+                payload_json,
+            } => {
+                // Fire and forget, like hooks.
+                state.registry.status_line(&baton_session, &payload_json);
+                None
+            }
             ClientMsg::ClientView {
                 on_screen,
                 terminal_focused,

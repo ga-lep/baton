@@ -142,6 +142,7 @@ Viewing a session in the main panel marks its `✓ your turn` as seen (→ `○ 
 editor = "code {path}"          # {path} = repo dir; spawned detached
 notifications = true
 scrollback_lines = 10000
+# statusline = "~/bin/my-statusline.sh"   # your own status line inside sessions (see below)
 
 [profiles.work]
 command = "claude"
@@ -177,6 +178,8 @@ restart = "r"
 unfocus = "ctrl-\\"
 next_attention = "alt-n"
 ```
+
+Baton sets Claude's status line to `baton statusline` (via `--settings`, which overrides a `statusLine` in Claude's own settings). It relays the status line JSON to the daemon, which shows the subscription quota (`rate_limits`: 5-hour and weekly windows, Pro/Max only) in the info panel of every session of the same profile. It then runs the configured `statusline` command with the same JSON on stdin and prints its output, or prints nothing.
 
 A session is identified by `(project, repo path)`. Changing config while the daemon runs leaves live sessions alone. New projects/repos show up on TUI reload (`baton` reads config on attach; the daemon re-reads on `OpenProject`).
 

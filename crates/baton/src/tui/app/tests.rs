@@ -18,6 +18,7 @@ fn info(id: &str, status: Status) -> SessionInfo {
         exit_code: None,
         usage: None,
         launch: None,
+        quota: None,
     }
 }
 
@@ -989,4 +990,54 @@ fn a_remapped_help_key_opens_and_closes_help() {
     assert_eq!(app.overlay, Overlay::Help);
     app.on_event(key(KeyCode::F(1)), HOST);
     assert_eq!(app.overlay, Overlay::None);
+}
+
+#[test]
+fn config_error_popup_is_dismissed_by_any_key_and_q_quits() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.on_config_error("/c.toml\ninvalid config: boom".into());
+    assert_eq!(app.overlay, Overlay::ConfigError);
+    assert_eq!(app.config_error(), Some("/c.toml\ninvalid config: boom"));
+    // The dismissing key is swallowed: j does not move the cursor.
+    assert!(app.on_event(ch('j'), HOST).is_empty());
+    assert_eq!(app.overlay, Overlay::None);
+    assert_eq!(shown(&app), Some("x//a"));
+    assert_eq!(app.notice.as_deref(), Some(CONFIG_ERROR_NOTICE));
+
+    app.on_config_error("x".into());
+    assert_eq!(app.on_event(ch('q'), HOST), vec![Effect::Quit]);
+}
+
+#[test]
+fn reconnecting_clears_the_config_error() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    app.on_config_error("x".into());
+    app.on_connected();
+    assert_eq!(app.overlay, Overlay::None);
+    assert_eq!(app.config_error(), None);
+}
+
+#[test]
+fn quota_updates_reach_the_session() {
+    let mut app = three(Status::Idle, Status::Idle, Status::Idle);
+    let quota = baton_proto::Quota {
+        five_hour: Some(baton_proto::QuotaWindow {
+            used_pct: 12.0,
+            resets_at: 9,
+        }),
+        seven_day: None,
+    };
+    app.on_daemon(
+        DaemonMsg::QuotaUpdated {
+            session: sid("x//a"),
+            quota,
+        },
+        Instant::now(),
+    );
+    let s = app
+        .sessions
+        .iter()
+        .find(|s| s.id == sid("x//a"))
+        .expect("session");
+    assert_eq!(s.quota, Some(quota));
 }

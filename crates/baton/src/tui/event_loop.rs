@@ -12,13 +12,15 @@ use ratatui::layout::Rect;
 
 use super::app::{App, Effect};
 use super::terminal_guard::TerminalGuard;
-use super::{editor, sidebar, ui};
+use super::{editor, git, sidebar, ui};
 use crate::client::{self, ClientError, Conn};
 
 type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 
 /// Sleep used when nothing is scheduled.
 const IDLE: Duration = Duration::from_secs(3600);
+/// How often the sessions' git branches are re-read.
+const BRANCH_POLL: Duration = Duration::from_secs(2);
 
 /// Receives from the connection, or never completes when there is none.
 async fn recv(conn: &mut Option<Conn>) -> Result<baton_proto::DaemonMsg, ClientError> {
@@ -71,7 +73,7 @@ fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
                     app.set_keymap(settings.keymap);
                     app.set_editor(settings.editor);
                 }
-                Err(e) => app.notice = Some(format!("config: {e}")),
+                Err(e) => app.on_config_error(e),
             }
             *conn = Some(c);
         }
@@ -152,9 +154,23 @@ pub async fn run() -> Result<()> {
 
 async fn drive(app: &mut App, conn: &mut Option<Conn>, terminal: &mut Term) -> Result<()> {
     let mut events = EventStream::new();
+    // When the branches were last read, and for how many sessions (a new
+    // session gets its branch at once rather than at the next poll).
+    let mut branches_read: Option<(Instant, usize)> = None;
     loop {
         app.expire(Instant::now());
-        let wait = app.next_deadline(Instant::now()).unwrap_or(IDLE);
+        if branches_read.is_none_or(|(t, n)| t.elapsed() >= BRANCH_POLL || n != app.sessions.len())
+        {
+            app.refresh_branches(git::branch);
+            branches_read = Some((Instant::now(), app.sessions.len()));
+        }
+        let until_poll = branches_read.map_or(Duration::ZERO, |(t, _)| {
+            BRANCH_POLL.saturating_sub(t.elapsed())
+        });
+        let wait = app
+            .next_deadline(Instant::now())
+            .unwrap_or(IDLE)
+            .min(until_poll);
         let effects = tokio::select! {
             ev = events.next() => match ev {
                 Some(Ok(ev)) => app.on_event(ev, host_rect(terminal)?),

@@ -221,6 +221,7 @@ impl Registry {
                 exit_code: None,
                 usage: None,
                 launch: None,
+                quota: None,
             });
         }
         out
@@ -382,6 +383,29 @@ impl Registry {
                 "dropping hook {event:?} for unknown session {:?}",
                 session.0
             ),
+        }
+    }
+
+    /// Applies a status line payload from a Claude child: its subscription
+    /// quota, if any, goes to every session of the same profile (one profile is
+    /// one account). Payloads without a quota and unknown sessions are dropped.
+    pub fn status_line(&self, session: &SessionId, payload_json: &str) {
+        let Some(quota) = hooks::parse_quota(payload_json) else {
+            return;
+        };
+        let inner = self.lock();
+        let Some(source) = inner.sessions.iter().find(|s| &s.id == session) else {
+            // The id is client-supplied: `{:?}` escapes control characters.
+            tracing::debug!("dropping status line for unknown session {:?}", session.0);
+            return;
+        };
+        let profile = source.info().profile;
+        for s in inner
+            .sessions
+            .iter()
+            .filter(|s| s.info().profile == profile)
+        {
+            s.send(Cmd::Quota(quota));
         }
     }
 

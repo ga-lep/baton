@@ -26,6 +26,9 @@ pub enum Command {
         #[arg(value_name = "EVENT")]
         event: String,
     },
+    /// Claude Code status line entry point; relays the quota to the daemon and
+    /// runs the `statusline` command from the config.
+    Statusline,
     /// Run the embedding spike against a child command (defaults to `claude`).
     Spike {
         /// Command and arguments to embed.

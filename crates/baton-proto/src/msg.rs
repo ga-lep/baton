@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bump on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Maximum size of one frame (16 MiB).
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -88,6 +88,11 @@ pub enum ClientMsg {
         event: String,
         payload_json: String,
     },
+    /// The JSON Claude Code passed to the session's status line command.
+    StatusLine {
+        baton_session: SessionId,
+        payload_json: String,
+    },
     Status,
     Shutdown,
 }
@@ -122,6 +127,11 @@ pub enum DaemonMsg {
         session: SessionId,
         usage: Option<Usage>,
     },
+    /// The account's subscription quota, as last reported for this session.
+    QuotaUpdated {
+        session: SessionId,
+        quota: Quota,
+    },
     /// Formatted scrollback rows starting at line `start`.
     Scrollback {
         session: SessionId,
@@ -155,6 +165,8 @@ pub struct SessionInfo {
     pub usage: Option<Usage>,
     /// Launch rung of the current child: `resume`, `continue` or `fresh`.
     pub launch: Option<String>,
+    /// Subscription quota of the session's account; `None` until reported.
+    pub quota: Option<Quota>,
 }
 
 /// Session status.
@@ -182,4 +194,22 @@ pub struct Usage {
     pub context_pct: Option<f32>,
     pub cost_usd: Option<f64>,
     pub model: Option<String>,
+}
+
+/// Claude subscription rate-limit usage (Pro/Max only).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Quota {
+    /// The rolling 5-hour window.
+    pub five_hour: Option<QuotaWindow>,
+    /// The weekly window.
+    pub seven_day: Option<QuotaWindow>,
+}
+
+/// One rate-limit window.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct QuotaWindow {
+    /// Share of the window used, 0 to 100.
+    pub used_pct: f32,
+    /// Unix timestamp (seconds) at which the window resets.
+    pub resets_at: u64,
 }
