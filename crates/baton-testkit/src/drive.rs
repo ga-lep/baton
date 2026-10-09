@@ -76,6 +76,10 @@ impl Drive {
         };
         let mut cmd = CommandBuilder::new(program);
         cmd.args(args);
+        // Never let the user's proxy leak into the child.
+        for k in crate::PROXY_VARS {
+            cmd.env_remove(k);
+        }
         cmd.env("TERM", "xterm-256color");
         for (k, v) in &opts.env {
             cmd.env(k, v);

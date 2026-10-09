@@ -13,6 +13,46 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
+/// Proxy variables `ureq` honours; a spawned baton must never inherit them,
+/// or update-check tests would talk to the user's proxy, not the fake server.
+pub const PROXY_VARS: &[&str] = &[
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
+/// Variables that locate state or switch behaviour; tests must set the ones
+/// they need explicitly rather than inherit them.
+pub const CONTROLLED_VARS: &[&str] = &[
+    "BATON_CONFIG",
+    "BATON_STATE_DIR",
+    "BATON_RUNTIME_DIR",
+    "BATON_NOTIFY_SINK",
+    "BATON_UPDATE_URL",
+    "BATON_NO_UPDATE_CHECK",
+    "BATON_SESSION",
+    "BATON_SOCK",
+    "BATON_HOOK_DEBUG",
+    "BATON_DOCTOR_PROBE_TIMEOUT_SECS",
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR",
+];
+
+/// Removes the inherited proxy, `BATON_*` and `XDG_*` variables from `cmd`.
+/// Call it before applying the test's own `.env(..)` settings.
+pub fn scrub_env(cmd: &mut Command) -> &mut Command {
+    for k in PROXY_VARS.iter().chain(CONTROLLED_VARS) {
+        cmd.env_remove(k);
+    }
+    cmd
+}
+
 /// Package that owns each workspace binary.
 fn package_of(name: &str) -> &'static str {
     match name {
@@ -65,5 +105,25 @@ pub fn wait_for<T>(timeout: Duration, mut f: impl FnMut() -> Option<T>) -> Resul
             bail!("timed out after {timeout:?}");
         }
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn scrub_env_removes_proxy_and_controlled_vars() {
+        let mut cmd = Command::new("true");
+        scrub_env(&mut cmd);
+        let removed: Vec<&OsStr> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k)
+            .collect();
+        for k in PROXY_VARS.iter().chain(CONTROLLED_VARS) {
+            assert!(removed.contains(&OsStr::new(k)), "{k} not scrubbed");
+        }
     }
 }

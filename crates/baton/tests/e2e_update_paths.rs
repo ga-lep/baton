@@ -2,7 +2,7 @@
 //! check; the TUI shows a non-blocking notice.
 
 use anyhow::Result;
-use baton_testkit::{Drive, DriveOptions, ReleaseServer, Reply, bin_path};
+use baton_testkit::{Drive, DriveOptions, ReleaseServer, Reply, bin_path, scrub_env};
 use regex::Regex;
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
@@ -47,13 +47,8 @@ impl Env {
 
     fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<Output> {
         let mut c = Command::new(bin_path("baton")?);
+        scrub_env(&mut c);
         c.args(args)
-            .env_remove("BATON_SESSION")
-            .env_remove("BATON_SOCK")
-            .env_remove("BATON_NO_UPDATE_CHECK")
-            .env_remove("XDG_STATE_HOME")
-            .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("XDG_CONFIG_HOME")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

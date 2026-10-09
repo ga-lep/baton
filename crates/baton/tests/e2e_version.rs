@@ -1,7 +1,7 @@
 //! End-to-end tests for `baton version [--check]` against a fake release server.
 
 use anyhow::Result;
-use baton_testkit::{ReleaseServer, Reply, bin_path};
+use baton_testkit::{ReleaseServer, Reply, bin_path, scrub_env};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -29,16 +29,13 @@ impl Env {
 
     fn run(&self, url: &str, args: &[&str], extra: &[(&str, &str)]) -> Result<Output> {
         let mut cmd = Command::new(bin_path("baton")?);
+        scrub_env(&mut cmd);
         cmd.arg("version")
             .args(args)
             .env("BATON_CONFIG", self.dir.path().join("config.toml"))
             .env("BATON_STATE_DIR", self.dir.path().join("state"))
             .env("BATON_RUNTIME_DIR", self.dir.path().join("run"))
             .env("BATON_UPDATE_URL", url)
-            .env_remove("BATON_NO_UPDATE_CHECK")
-            .env_remove("XDG_STATE_HOME")
-            .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("XDG_CONFIG_HOME")
             .stdin(Stdio::null());
         for (k, v) in extra {
             cmd.env(k, v);
@@ -246,7 +243,9 @@ fn state_dir_and_cache_are_private_and_doctor_passes() -> Result<()> {
     let url = format!("http://127.0.0.1:{port}/x");
     let bin = bin_path("baton")?;
     let run = |sub: &[&str]| -> Result<Output> {
-        Ok(Command::new("sh")
+        let mut cmd = Command::new("sh");
+        scrub_env(&mut cmd);
+        Ok(cmd
             .args([
                 "-c",
                 "umask 022; exec \"$0\" \"$@\"",
@@ -257,10 +256,6 @@ fn state_dir_and_cache_are_private_and_doctor_passes() -> Result<()> {
             .env("BATON_STATE_DIR", env.dir.path().join("state"))
             .env("BATON_RUNTIME_DIR", env.dir.path().join("run"))
             .env("BATON_UPDATE_URL", &url)
-            .env_remove("BATON_NO_UPDATE_CHECK")
-            .env_remove("XDG_STATE_HOME")
-            .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("XDG_CONFIG_HOME")
             .stdin(Stdio::null())
             .output()?)
     };

@@ -1,7 +1,7 @@
 //! End-to-end tests for `baton doctor`.
 
 use anyhow::Result;
-use baton_testkit::{ReleaseServer, Reply, bin_path};
+use baton_testkit::{ReleaseServer, Reply, bin_path, scrub_env};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
@@ -35,6 +35,7 @@ impl Env {
     /// (which disable the update check).
     fn doctor_with(&self, args: &[&str], extra: &[(&str, &str)]) -> Result<Output> {
         let mut cmd = Command::new(bin_path("baton")?);
+        scrub_env(&mut cmd);
         cmd.arg("doctor")
             .args(args)
             .env("BATON_NO_UPDATE_CHECK", "1")
