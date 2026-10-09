@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/baton-proto", "crates/baton-core", "crates/baton", "crates/baton-testkit"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 publish = false
@@ -28,3 +28,8 @@ vt100 = "0.16"
 baton-proto = { path = "crates/baton-proto" }
 baton-core = { path = "crates/baton-core" }
 baton-testkit = { path = "crates/baton-testkit" }
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
