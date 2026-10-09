@@ -148,8 +148,12 @@ pub fn draw(f: &mut Frame, app: &App) {
     let mut title = app.selected_session().map_or_else(
         || "Baton".to_owned(),
         |s| {
+            let branch = app
+                .branch(s)
+                .map(|b| format!(" · ⎇ {b}"))
+                .unwrap_or_default();
             format!(
-                "{} · {} · {} {}",
+                "{}{branch} · {} · {} {}",
                 repo_name(s),
                 s.profile.as_deref().unwrap_or("default"),
                 badge(s.status),
@@ -374,6 +378,16 @@ mod tests {
         for field in ["/tmp/a", "profile  p", "status   running", "uptime   "] {
             assert!(out.contains(field), "{field}: {out}");
         }
+    }
+
+    #[test]
+    fn main_title_shows_the_git_branch_when_known() {
+        let mut app = app_with_session();
+        app.sessions[0].profile = Some("p".into());
+        app.refresh_branches(|_| Some("feat/quota".into()));
+        assert!(render(&app).contains("a · ⎇ feat/quota · p · ● running"));
+        app.refresh_branches(|_| None);
+        assert!(render(&app).contains("a · p · ● running"));
     }
 
     #[test]

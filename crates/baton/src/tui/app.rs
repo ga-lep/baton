@@ -4,6 +4,7 @@
 //! unit-testable.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use baton_core::attention;
@@ -118,6 +119,8 @@ pub struct App {
     editor: String,
     /// A message for the bottom bar and the instant it expires.
     flash: Option<(String, Instant)>,
+    /// Checked-out git branch per session repo path (absent: not a repo).
+    branches: HashMap<String, String>,
 }
 
 fn is_closed(s: &SessionInfo) -> bool {
@@ -169,6 +172,7 @@ impl App {
             keymap: Keymap::default(),
             editor: baton_core::config::Config::default().editor,
             flash: None,
+            branches: HashMap::new(),
         }
     }
 
@@ -230,6 +234,25 @@ impl App {
     pub fn selected_session(&self) -> Option<&SessionInfo> {
         let id = self.current.as_ref()?;
         self.sessions.iter().find(|s| &s.id == id)
+    }
+
+    /// Re-reads the git branch of every session's repo with `read`; asks for
+    /// a render only when a branch changed.
+    pub fn refresh_branches(&mut self, read: impl Fn(&Path) -> Option<String>) {
+        let branches: HashMap<String, String> = self
+            .sessions
+            .iter()
+            .filter_map(|s| Some((s.repo.clone(), read(Path::new(&s.repo))?)))
+            .collect();
+        if branches != self.branches {
+            self.branches = branches;
+            self.pacer.mark_dirty();
+        }
+    }
+
+    /// The git branch of `s`'s repo, as of the last refresh.
+    pub fn branch(&self, s: &SessionInfo) -> Option<&str> {
+        self.branches.get(&s.repo).map(String::as_str)
     }
 
     /// Configured projects merged with the sessions, as sidebar rows.
