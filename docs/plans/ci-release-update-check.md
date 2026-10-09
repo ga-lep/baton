@@ -2,7 +2,7 @@
 Status: APPROVED
 
 ## Goal
-Add a GitHub Actions pipeline to `github.com/ga-lep/baton`. It runs the project gate (`cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test`) on every push to `main` and on every pull request that targets `main`. When a `v*` tag is pushed, it builds the `baton` binary for Linux x86_64 (a static musl build plus a glibc build) and publishes it with checksums and the `LICENSE` as a GitHub Release. The project is relicensed from MIT to the PolyForm Noncommercial License 1.0.0, which makes it source-available, not open source. The version is bumped to `0.2.0` for the first release. The `baton` binary also learns to tell the user when a newer release exists: through an explicit `baton version --check`, a line in `baton doctor`, and a non-blocking notice in the TUI. The check uses unauthenticated GitHub API calls. It is cached, can be disabled, and degrades quietly when offline or when no public release is reachable. It is never reachable from the `baton hook`, `baton statusline` or daemon paths, which must stay silent and fast.
+Add a GitHub Actions pipeline to `github.com/ga-lep/baton`. It runs the project gate (`cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test`) on every push to `main` and on every pull request that targets `main`. When a `v*` tag is pushed, it builds the `baton` binary for Linux x86_64 (a static musl build plus a glibc build) and publishes it with checksums, the `LICENSE` and the `README.md` as a GitHub Release. The project stays under the MIT license, which the workspace already declares; a `LICENSE` file with the standard MIT text and a short `README.md` are added. The version is bumped to `0.2.0` for the first release. The `baton` binary also learns to tell the user when a newer release exists: through an explicit `baton version --check`, a line in `baton doctor`, and a non-blocking notice in the TUI. The check uses unauthenticated GitHub API calls. It is cached, can be disabled, and degrades quietly when offline or when no public release is reachable. It is never reachable from the `baton hook`, `baton statusline` or daemon paths, which must stay silent and fast.
 
 ## Verified findings (checked 2026-10-09 on this machine)
 1. **The e2e tests run headless as-is.** `setsid -w env -u DBUS_SESSION_BUS_ADDRESS -u DISPLAY -u WAYLAND_DISPLAY -u XDG_RUNTIME_DIR -u TERM -u COLORTERM CI=true cargo test --locked </dev/null` passed every test in about 25 s. That means no controlling TTY, no D-Bus, no runtime dir and no `TERM`. The tests stay headless because:
@@ -23,11 +23,9 @@ Add a GitHub Actions pipeline to `github.com/ga-lep/baton`. It runs the project 
 7. `Config` parsing uses `#[serde(deny_unknown_fields)]` on `RawConfig`, so a new top-level key has to be added to `RawConfig`, `Config` and `Default`.
 8. The TUI event loop (`crates/baton/src/tui/event_loop.rs`) is a `tokio::select!` over terminal events, the daemon connection and a timer. A new branch fits there to receive a background result.
 9. **License.**
-   - All four crates use `license.workspace = true`, so changing `[workspace.package] license` relicenses every crate in one place.
+   - `[workspace.package]` already declares `license = "MIT"`, and all four crates use `license.workspace = true`. `cargo metadata --no-deps --format-version 1 | jq -r '.packages[].license' | sort -u` prints `MIT` today, so no `Cargo.toml` change is needed.
    - The repo has no `LICENSE` and no `README` file today.
-   - `PolyForm-Noncommercial-1.0.0` is an official SPDX identifier, and SPDX marks it `isOsiApproved: false`, so the project becomes source-available, not open source.
-   - The canonical Markdown text is at `https://raw.githubusercontent.com/polyformproject/polyform-licenses/1.0.0/PolyForm-Noncommercial-1.0.0.md`: 73 lines, sha256 `c0ea4a896d2c8c394b29f9427589996db826cd501c512279ff0ed3ef48fabbe5`.
-   - The license requires that recipients get the terms plus any lines starting with `Required Notice:`. Its example is `Required Notice: Copyright Yoyodyne, Inc. (http://example.com)`.
+   - The copyright holder is the GitHub account `ga-lep`.
 
 ## Decisions
 
@@ -84,10 +82,10 @@ Add a GitHub Actions pipeline to `github.com/ga-lep/baton`. It runs the project 
   - for musl, show `file baton` reporting `statically linked`.
 
 ### License
-- **License:** PolyForm Noncommercial License 1.0.0, copyright holder `ga-lep`. It forbids commercial use and makes the project **source-available, not open source** (not OSI-approved).
-- **`LICENSE`:** the canonical Markdown text, unmodified (sha256 as in finding 9), followed by a blank line and the line `Required Notice: Copyright ga-lep (https://github.com/ga-lep/baton)`.
-- **Cargo:** `[workspace.package] license = "PolyForm-Noncommercial-1.0.0"`, the official SPDX id. It is used instead of `license-file` or a `LicenseRef-`, because SPDX lists it and every crate already inherits the field.
-- **README:** a new minimal `README.md` (what Baton is in two lines, install pointer to `docs/RELEASING.md`, and a License section stating the non-commercial and source-available terms). It is shipped in the archives next to `LICENSE`.
+- **License:** MIT, copyright holder `ga-lep`.
+- **`LICENSE`:** the standard MIT License text (as published by OSI / SPDX `MIT`), first line `MIT License`, with the copyright line `Copyright (c) 2026 ga-lep`.
+- **Cargo:** `[workspace.package] license = "MIT"` is kept as-is; every crate already inherits it through `license.workspace = true`.
+- **README:** a new short `README.md` (what Baton is, installing from GitHub Releases, `baton version --check`, the update-check opt-out, and a License section reading MIT). It is shipped in the archives next to `LICENSE`.
 
 ### Update check
 - **Surfaces:**
@@ -234,20 +232,22 @@ Acceptance criteria:
 - `baton hook Stop` with no daemon still returns in under 1 s, as it does today. The test asserts wall time.
 Evidence: `drive --size 30x120 --step 'wait:v99.0.0 available' --step dump --step 'send:q' --step 'expect-exit:0' -- target/debug/baton`, run with `BATON_UPDATE_URL` pointing at a fake server returning `v99.0.0`, prints a screen with the notice. `echo '{}' | BATON_UPDATE_URL=http://127.0.0.1:1/ baton hook Stop; echo $?` prints only `0`.
 
-### Task 6: Relicense to PolyForm Noncommercial 1.0.0
+### Task 6: Add MIT LICENSE and README
 Language: rust
-Files: `LICENSE` (new), `README.md` (new), `Cargo.toml` (`[workspace.package] license`)
+Files: `LICENSE` (new), `README.md` (new)
 Depends on: none
 Acceptance criteria:
-- `LICENSE` consists of the canonical PolyForm Noncommercial 1.0.0 Markdown text, byte-for-byte: `head -n 73 LICENSE | sha256sum` gives `c0ea4a896d2c8c394b29f9427589996db826cd501c512279ff0ed3ef48fabbe5`. The text is followed by one blank line and the line `Required Notice: Copyright ga-lep (https://github.com/ga-lep/baton)`.
-- `[workspace.package]` has `license = "PolyForm-Noncommercial-1.0.0"`, and no crate has `license = "MIT"` any more: `grep -rn 'MIT' Cargo.toml crates/*/Cargo.toml` finds nothing. All four crates still use `license.workspace = true`.
-- `cargo metadata --no-deps --format-version 1 | jq -r '.packages[].license' | sort -u` prints exactly `PolyForm-Noncommercial-1.0.0`.
-- `README.md` contains:
-  - a two-line description of Baton;
-  - a pointer to `docs/RELEASING.md` for installing;
-  - a `## License` section stating that Baton is licensed under the PolyForm Noncommercial License 1.0.0, that commercial use is not permitted, and that this makes the project **source-available, not open source** (the license is not OSI-approved), with the license URL.
+- `LICENSE` contains the standard MIT License text: its first line is `MIT License`, it contains the line `Copyright (c) 2026 ga-lep`, and the remainder is the unmodified standard MIT permission notice and warranty disclaimer (from "Permission is hereby granted, free of charge" through "OTHER DEALINGS IN THE SOFTWARE.").
+- `Cargo.toml` is unchanged: `[workspace.package]` keeps `license = "MIT"`, and all four crates still use `license.workspace = true` (`grep -c 'license.workspace = true' crates/*/Cargo.toml` gives 1 for each).
+- `cargo metadata --no-deps --format-version 1 | jq -r '.packages[].license' | sort -u` prints exactly `MIT`.
+- `README.md` is short and contains:
+  - a brief description of what Baton is;
+  - an install section: download the `x86_64-unknown-linux-musl` archive (recommended) from GitHub Releases (`https://github.com/ga-lep/baton/releases`), verify it with `sha256sum -c`, and put `baton` on `PATH` (e.g. `~/.local/bin`), with a pointer to `docs/RELEASING.md` for details;
+  - `baton version --check` to check for a newer release;
+  - the update-check opt-out: `BATON_NO_UPDATE_CHECK=1` or `update_check = false` in the config;
+  - a `## License` section stating that Baton is licensed under the MIT License, pointing to `LICENSE`.
 - The gate still passes.
-Evidence: `cargo metadata --no-deps --format-version 1 | jq -r '.packages[].license' | sort -u` prints `PolyForm-Noncommercial-1.0.0`. `tail -n 1 LICENSE` prints the Required Notice line.
+Evidence: `cargo metadata --no-deps --format-version 1 | jq -r '.packages[].license' | sort -u` prints `MIT`. `head -1 LICENSE` prints `MIT License`.
 
 ### Task 7: Release workflow, release profile, version bump to 0.2.0 and release docs
 Language: rust
@@ -277,7 +277,7 @@ Acceptance criteria:
   - installing to `~/.local/bin`;
   - `BATON_NO_UPDATE_CHECK` and `update_check = false`;
   - a **note that the repo must be made public before the update check and public downloads work**. Until then, `baton version --check` reports `no public release found`, doctor shows a WARN, and the TUI shows nothing, the same as offline;
-  - a license note: PolyForm Noncommercial 1.0.0, source-available and not open source, `LICENSE` shipped in every archive.
+  - a license note: MIT, with `LICENSE` and `README.md` shipped in every archive.
 - `actionlint` reports no errors.
 Evidence:
 - `actionlint` exits 0.
