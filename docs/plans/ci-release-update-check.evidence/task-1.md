@@ -70,5 +70,40 @@ The workflow was triggered by the PR (so the trigger works), but no step ran; no
 ## If any e2e fails on runner but not locally, fix goes in this task
 Status: NOT PROVEN (no runner execution happened)
 
+## Re-run after repo made public (run 37935358104, head sha 177334db71f1f8740705abd919f19edb1a67fddd)
+Status: PROVEN (supersedes the two NOT PROVEN sections above)
+```console
+$ gh run watch 37935358104 --repo ga-lep/baton --exit-status >/dev/null; echo "exit=$?"
+exit=0
+$ gh run view 37935358104 --repo ga-lep/baton
+✓ feat/ci-release-update-check CI ga-lep/baton#4 · 37935358104
+Triggered via pull_request about 2 minutes ago
+JOBS
+✓ gate in 2m14s (ID 113837739985)
+$ gh run view 37935358104 --repo ga-lep/baton --log > log.txt
+$ grep -c 'test result: ok' log.txt
+24
+$ grep -c 'test result:' log.txt
+24
+$ grep 'test result:' log.txt | grep -v ' 0 ignored'
+(no output: every binary reports 0 ignored)
+$ grep -E 'Running |Doc-tests|test result:' log.txt   # trimmed to e2e binaries, log prefixes stripped
+Running tests/e2e_daemon.rs      -> ok. 3 passed; 0 failed; 0 ignored
+Running tests/e2e_doctor.rs      -> ok. 4 passed; 0 failed; 0 ignored
+Running tests/e2e_hook.rs        -> ok. 8 passed; 0 failed; 0 ignored
+Running tests/e2e_keys.rs        -> ok. 3 passed; 0 failed; 0 ignored
+Running tests/e2e_notify.rs      -> ok. 3 passed; 0 failed; 0 ignored
+Running tests/e2e_resume.rs      -> ok. 10 passed; 0 failed; 0 ignored
+Running tests/e2e_sessions.rs    -> ok. 11 passed; 0 failed; 0 ignored
+Running tests/e2e_spike.rs       -> ok. 2 passed; 0 failed; 0 ignored
+Running tests/e2e_status.rs      -> ok. 3 passed; 0 failed; 0 ignored
+Running tests/e2e_tui_attach.rs  -> ok. 3 passed; 0 failed; 0 ignored
+Running tests/e2e_tui_projects.rs-> ok. 1 passed; 0 failed; 0 ignored
+Running tests/e2e_usage.rs       -> ok. 3 passed; 0 failed; 0 ignored
+```
+Other binaries also ok: baton unittests 167, config_check 3, baton_core 96 + config_examples 12, baton_proto 7, baton_testkit 1, drive_smoke 1, doc-tests 5/0/0. 12 `e2e_*` binaries, 54 e2e tests, all run, none ignored. The count (24) matches the local gate. The run executed on the PR at the task commit, green.
+
+Second criterion (runner-only e2e failure requires fix + findings update): no e2e test failed on the runner, so no fix or findings update was needed. No `#[ignore]` was used (0 ignored everywhere).
+
 ## Verdict
-EVIDENCE: BLOCKED (GitHub Actions job refused to start: account billing/spending limit)
+EVIDENCE: PROVEN
