@@ -295,6 +295,7 @@ impl Registry {
                 hook_timeout: Duration::from_secs(config.hook_timeout_secs),
                 notifications: config.notifications,
                 notifier: &self.notifier,
+                pricing: &config.pricing,
             };
             // No registry lock here: spawning a PTY can be slow.
             match session::start(&launch, &self.groups) {

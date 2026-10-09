@@ -7,6 +7,7 @@ pub mod registry;
 pub mod server;
 pub mod session;
 pub mod spawn;
+pub mod tailer;
 
 use anyhow::{Context, Result};
 use baton_core::paths;

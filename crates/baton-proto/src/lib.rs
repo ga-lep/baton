@@ -129,7 +129,11 @@ mod tests {
             },
             DaemonMsg::UsageUpdated {
                 session: sid(),
-                usage: usage(),
+                usage: Some(usage()),
+            },
+            DaemonMsg::UsageUpdated {
+                session: sid(),
+                usage: None,
             },
             DaemonMsg::Scrollback {
                 session: sid(),

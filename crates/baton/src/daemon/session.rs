@@ -3,7 +3,7 @@
 use super::notifier::{Notification, Notifier};
 use super::persist::{Store, now_secs};
 use super::registry::ChildGroups;
-use super::{lifecycle, spawn};
+use super::{lifecycle, spawn, tailer};
 use crate::term::screen::Screen;
 use crate::term::vt100_screen::Vt100Screen;
 use anyhow::{Result, bail};
@@ -11,17 +11,18 @@ use baton_core::config::SessionSpec;
 use baton_core::hooks::HookPayload;
 use baton_core::launch::{self, Rung};
 use baton_core::notify_rule::{self, ClientView};
+use baton_core::pricing::Pricing;
 use baton_core::state::PersistedSession;
 use baton_core::status::{self, Input};
-use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status};
+use baton_proto::{DaemonMsg, SessionId, SessionInfo, Status, Usage};
 use nix::unistd::Pid;
 use portable_pty::PtySize;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -65,6 +66,8 @@ pub enum Cmd {
     SetView(Option<ClientView>),
     /// The user explicitly marks the session as seen.
     MarkViewed,
+    /// The transcript tailer's latest result (`None`: unreadable, shown as `n/a`).
+    Usage(Option<Usage>),
 }
 
 /// The attached client's outgoing queue plus the switch that makes its
@@ -137,6 +140,8 @@ pub struct Launch<'a> {
     pub resume_id: Option<String>,
     /// Where session metadata is persisted.
     pub store: &'a Arc<Store>,
+    /// Price table and context windows for the usage summary.
+    pub pricing: &'a Pricing,
 }
 
 /// What a child process needs to be (re)started, kept for the session's life.
@@ -179,6 +184,7 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         store: Arc::clone(l.store),
         hook_timeout: l.hook_timeout,
     };
+    let usage_path = spawn_tailer(l.spec, l.pricing, &cmd_tx);
     let rung = launch::first_rung(l.resume_id.as_deref());
     let generation = 1;
     let proc = launch_child(&ctx, &rung, generation, l.size)?;
@@ -210,6 +216,7 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         ctx,
         info: Arc::clone(&info),
         client: None,
+        usage_path,
         exited: false,
         status: Status::Starting,
         view: None,
@@ -229,6 +236,29 @@ pub fn start(l: &Launch<'_>, groups: &Arc<ChildGroups>) -> Result<SessionHandle>
         info,
         tx: cmd_tx,
     })
+}
+
+/// Starts the transcript tailer for a session and returns the switch that
+/// tells it which file to follow. Its results arrive as [`Cmd::Usage`]; it
+/// ends with the session task.
+fn spawn_tailer(
+    spec: &SessionSpec,
+    pricing: &Pricing,
+    cmd_tx: &mpsc::UnboundedSender<Cmd>,
+) -> watch::Sender<Option<PathBuf>> {
+    let (path_tx, path_rx) = watch::channel(None);
+    match tailer::projects_root(spec, &|k| std::env::var(k).ok()) {
+        Some(root) => {
+            let cmd_tx = cmd_tx.clone();
+            tokio::spawn(tailer::run(
+                tailer::Tailer::new(root, pricing.clone()),
+                path_rx,
+                move |usage| cmd_tx.send(Cmd::Usage(usage)).is_ok(),
+            ));
+        }
+        None => tracing::debug!("no Claude config dir known; usage stays n/a"),
+    }
+    path_tx
 }
 
 /// Starts one child of generation `generation` with the arguments of `rung`, its
@@ -333,6 +363,8 @@ struct Task {
     ctx: Ctx,
     info: Arc<Mutex<SessionInfo>>,
     client: Option<ClientSink>,
+    /// Which transcript the tailer follows.
+    usage_path: watch::Sender<Option<PathBuf>>,
     exited: bool,
     status: Status,
     /// What the attached client shows; `None` when none is attached.
@@ -409,6 +441,13 @@ impl Task {
                 self.apply(Input::Viewed);
             }
             Cmd::MarkViewed => self.apply(Input::Viewed),
+            Cmd::Usage(usage) => {
+                self.info.lock().unwrap_or_else(|e| e.into_inner()).usage = usage.clone();
+                self.forward(DaemonMsg::UsageUpdated {
+                    session: self.id.clone(),
+                    usage,
+                });
+            }
             Cmd::Exited { .. } | Cmd::Restart => {} // handled in `run`
         }
     }
@@ -541,6 +580,7 @@ impl Task {
                 launch::id_after_launch(info.claude_session_id.as_deref(), &rung);
             if matches!(rung, Rung::Fresh(_)) {
                 info.transcript_path = None;
+                self.usage_path.send_replace(None);
             }
         }
         self.rung = rung;
@@ -591,7 +631,13 @@ impl Task {
             info.claude_session_id = checked.session_id;
             info.transcript_path = checked.transcript_path;
             info.model = checked.model;
+            let path = info.transcript_path.as_deref().map(PathBuf::from);
             drop(info);
+            self.usage_path.send_if_modified(|cur| {
+                let changed = *cur != path;
+                *cur = path;
+                changed
+            });
             self.saw_start = true;
             self.persist();
         }

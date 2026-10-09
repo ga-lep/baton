@@ -823,3 +823,35 @@ fn opening_replaces_remembered_sessions_with_live_ones() {
     app.on_event(key(KeyCode::Enter), HOST);
     assert_eq!(app.mode, Mode::Focus);
 }
+
+#[test]
+fn usage_updates_replace_the_sessions_usage_and_none_means_n_a() {
+    let mut app = app();
+    let usage = baton_proto::Usage {
+        input: 7,
+        ..Default::default()
+    };
+    app.on_daemon(
+        DaemonMsg::UsageUpdated {
+            session: sid("x//b"),
+            usage: Some(usage.clone()),
+        },
+        Instant::now(),
+    );
+    let by_id = |app: &App, id: &str| {
+        app.sessions
+            .iter()
+            .find(|s| s.id == sid(id))
+            .and_then(|s| s.usage.clone())
+    };
+    assert_eq!(by_id(&app, "x//b"), Some(usage));
+    assert_eq!(by_id(&app, "x//a"), None);
+    app.on_daemon(
+        DaemonMsg::UsageUpdated {
+            session: sid("x//b"),
+            usage: None,
+        },
+        Instant::now(),
+    );
+    assert_eq!(by_id(&app, "x//b"), None);
+}

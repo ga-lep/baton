@@ -290,6 +290,12 @@ impl App {
                 }
                 self.pacer.mark_dirty();
             }
+            DaemonMsg::UsageUpdated { session, usage } => {
+                if let Some(s) = self.sessions.iter_mut().find(|s| s.id == session) {
+                    s.usage = usage;
+                }
+                self.pacer.mark_dirty();
+            }
             DaemonMsg::Scrollback {
                 session,
                 start,

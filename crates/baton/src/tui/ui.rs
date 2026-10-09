@@ -3,9 +3,11 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout as Split, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
 use super::app::{App, Overlay};
+use super::info_panel;
 use super::labels::{badge, status_label};
 use super::sidebar::repo_name;
 use crate::spike::Mode;
@@ -18,23 +20,27 @@ pub const NORMAL_BAR: &str =
 pub const FOCUS_BAR: &str = " FOCUS │ Ctrl-\\ back  Alt-n next-attention  Alt-1..9 session";
 /// Shown when the daemon connection is lost.
 pub const DISCONNECTED_TEXT: &str = "daemon disconnected — press r to reconnect, q to quit";
-/// Height of the info panel under the session list.
-const INFO_HEIGHT: u16 = 8;
-
-/// Compact duration such as `5s`, `3m 07s` or `2h 05m`.
-pub fn uptime(started_at: u64, now: u64) -> String {
-    let secs = now.saturating_sub(started_at);
-    match secs {
-        0..60 => format!("{secs}s"),
-        60..3600 => format!("{}m {:02}s", secs / 60, secs % 60),
-        _ => format!("{}h {:02}m", secs / 3600, secs % 3600 / 60),
-    }
-}
+/// Height of the info panel under the session list: 11 rows, a notice and the border.
+const INFO_HEIGHT: u16 = 14;
 
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+fn info_text(app: &App, width: u16) -> Vec<Line<'static>> {
+    let Some(s) = app.selected_session() else {
+        return vec![Line::from("no session")];
+    };
+    let home = std::env::var("HOME").ok();
+    info_panel::lines(
+        s,
+        unix_now(),
+        home.as_deref(),
+        usize::from(width),
+        app.notice.as_deref(),
+    )
 }
 
 /// Text of the version-mismatch modal.
@@ -65,7 +71,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         &mut state,
     );
     f.render_widget(
-        Paragraph::new(info_text(app))
+        Paragraph::new(info_text(app, info_area.width.saturating_sub(2)))
             .wrap(Wrap { trim: true })
             .block(Block::default().borders(Borders::ALL).title("Session")),
         info_area,
@@ -128,28 +134,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         Overlay::VersionMismatch { daemon } => modal(f, &mismatch_text(daemon)),
         Overlay::Disconnected => modal(f, DISCONNECTED_TEXT),
     }
-}
-
-fn info_text(app: &App) -> String {
-    let Some(s) = app.selected_session() else {
-        return "no session".into();
-    };
-    let mut text = format!(
-        "{}\nprofile  {}\nstatus  {}\nuptime  {}",
-        s.repo,
-        s.profile.as_deref().unwrap_or("default"),
-        status_label(s.status),
-        uptime(s.started_at, unix_now()),
-    );
-    if let Some(launch) = &s.launch {
-        text.push_str("\nlaunch  ");
-        text.push_str(launch);
-    }
-    if let Some(msg) = &app.notice {
-        text.push_str("\n! ");
-        text.push_str(msg);
-    }
-    text
 }
 
 fn modal(f: &mut Frame, text: &str) {
@@ -239,7 +223,7 @@ mod tests {
         let mut app = app_with_session();
         app.sessions[0].launch = Some("resume".into());
         let out = render(&app);
-        assert!(out.contains("launch  resume"), "{out}");
+        assert!(out.contains("launch   resume"), "{out}");
         assert!(!out.contains("Restart a?"), "{out}");
         app.on_event(
             crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
@@ -279,7 +263,7 @@ mod tests {
         app.sessions[0].profile = Some("p".into());
         let out = render(&app);
         assert!(out.contains("a · p · ● running"), "{out}");
-        for field in ["/tmp/a", "profile  p", "status  running", "uptime  "] {
+        for field in ["/tmp/a", "profile  p", "status   running", "uptime   "] {
             assert!(out.contains(field), "{field}: {out}");
         }
     }
@@ -305,14 +289,6 @@ mod tests {
         let out = render(&app);
         assert!(out.contains("[scrollback -18]"), "{out}");
         assert!(out.contains("│old82") && out.contains("│old99"), "{out}");
-    }
-
-    #[test]
-    fn uptime_is_compact() {
-        assert_eq!(uptime(100, 105), "5s");
-        assert_eq!(uptime(0, 187), "3m 07s");
-        assert_eq!(uptime(0, 7500), "2h 05m");
-        assert_eq!(uptime(50, 10), "0s");
     }
 
     #[test]

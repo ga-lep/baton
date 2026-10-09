@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bump on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Maximum size of one frame (16 MiB).
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -117,9 +117,10 @@ pub enum DaemonMsg {
         session: SessionId,
         status: Status,
     },
+    /// `usage: None` means the transcript cannot be read (shown as `n/a`).
     UsageUpdated {
         session: SessionId,
-        usage: Usage,
+        usage: Option<Usage>,
     },
     /// Formatted scrollback rows starting at line `start`.
     Scrollback {

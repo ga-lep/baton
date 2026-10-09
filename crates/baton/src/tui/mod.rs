@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod event_loop;
+pub mod info_panel;
 pub mod labels;
 pub mod mirror;
 pub mod render_pacer;
