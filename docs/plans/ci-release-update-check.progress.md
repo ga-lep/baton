@@ -23,3 +23,4 @@ Task 6: restarted (user switched license from PolyForm Noncommercial to MIT; fir
 Task 6: complete (b54f59f..2423db4, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/ci-release-update-check.evidence/task-6.md
   notes: License switched to MIT by the user (plan revised and re-approved, b54f59f^). Security Low: README says "verify" but the checksum comes from the same release, so it only proves integrity, not provenance — reword, and consider actions/attest-build-provenance + `gh attestation verify` in Task 7. Info: README's "<checksum file>" should name the exact .sha256 file (or SHA256SUMS --ignore-missing); README links docs/RELEASING.md, which Task 7 must add. Evidence: one real-API `version --check` run hit `timeout: global` (3 s) before two reruns gave "no public release found".
+Task 7: started
