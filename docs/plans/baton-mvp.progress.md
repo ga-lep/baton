@@ -62,3 +62,4 @@ Task 16: started
 Task 16: complete (19545e8..6a3c8f3, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-16.md
   notes: M4 reached. round 1 review FAIL (persisted sessions not listed as closed; failed --resume erased stored id) -> fixed in 6a3c8f3: Status::Closed (PROTOCOL_VERSION 4), launch::id_after_launch keeps id, per-entry tolerant state.json parse; first launch in a repo with no history: --continue fails then fresh (~2 s); non-zero exit <10 s before SessionStart = failed rung (Ctrl-C at trust dialog relaunches next rung); [sec Low] clean() lets bidi/zero-width (Cf) through; Closed rows display project/repo from state.json not config spec; restart after leader exit leaves group descendants; reap/unregister window; stale state.json.tmp.<pid> not cleaned; [sec Info] --continue fallback may pick another conversation in same repo
+Task 17: started
