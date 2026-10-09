@@ -11,6 +11,9 @@ const DEFAULT_URL: &str = "https://api.github.com/repos/ga-lep/baton/releases/la
 /// Largest response body accepted.
 const MAX_BODY: u64 = 1024 * 1024;
 
+/// Timeout for the background check of the TUI.
+pub const TUI_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Timeout for explicit checks and `baton doctor`.
 pub const CLI_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -186,6 +189,66 @@ pub fn check(force: bool, timeout: Duration) -> Result<Checked, String> {
             Err(reason)
         }
     }
+}
+
+/// What the TUI knows about updates at startup.
+#[derive(Debug)]
+pub struct Startup {
+    /// A newer version (without the leading `v`) known from the cache.
+    pub available: Option<String>,
+    /// Result of a background fetch, when the cache was stale.
+    pub pending: Option<tokio::sync::oneshot::Receiver<Option<String>>>,
+}
+
+/// Reads the cache (a tiny file) and, when it is stale, starts a detached
+/// background fetch. Does nothing when automatic checks are disabled.
+pub fn startup() -> Startup {
+    let none = Startup {
+        available: None,
+        pending: None,
+    };
+    let flag = crate::cmd::version::config_flag();
+    if !baton_core::update::enabled(flag, &|k| std::env::var(k).ok()) {
+        return none;
+    }
+    let Ok(path) = paths::update_cache_path() else {
+        return none;
+    };
+    let cached = Cache::load(&path);
+    let available = cached
+        .as_ref()
+        .filter(|c| c.ok)
+        .and_then(|c| from_cache(c).ok())
+        .and_then(|c| newer(&c.outcome));
+    let fresh = cached.is_some_and(|c| c.is_fresh(now_secs()));
+    Startup {
+        available,
+        pending: (!fresh).then(|| spawn_background(TUI_TIMEOUT)),
+    }
+}
+
+fn newer(outcome: &Outcome) -> Option<String> {
+    match outcome {
+        Outcome::Newer { latest } => Some(latest.clone()),
+        Outcome::UpToDate | Outcome::Unknown(_) => None,
+    }
+}
+
+/// Runs [`check`] on a detached thread; the receiver yields the newer
+/// version, if any. Errors are only logged: the TUI owns the terminal.
+pub fn spawn_background(timeout: Duration) -> tokio::sync::oneshot::Receiver<Option<String>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let found = match check(false, timeout) {
+            Ok(c) => newer(&c.outcome),
+            Err(e) => {
+                tracing::debug!("update check failed: {e}");
+                None
+            }
+        };
+        let _ = tx.send(found);
+    });
+    rx
 }
 
 #[cfg(test)]

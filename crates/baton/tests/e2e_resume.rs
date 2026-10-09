@@ -45,6 +45,7 @@ impl Env {
         c.args(args).stdin(std::process::Stdio::null());
         c.env("BATON_CONFIG", self.p("config.toml"))
             .env("BATON_STATE_DIR", self.p("state"))
+            .env("BATON_NO_UPDATE_CHECK", "1")
             .env("BATON_RUNTIME_DIR", self.p("run"))
             .env("BATON_NOTIFY_SINK", "off")
             .env("FAKE_CLAUDE_HOME", self.p("fake-claude"))
@@ -57,6 +58,7 @@ impl Env {
         c.args(args).stdin(std::process::Stdio::null());
         c.env("BATON_CONFIG", self.p("config.toml"))
             .env("BATON_STATE_DIR", self.p("state"))
+            .env("BATON_NO_UPDATE_CHECK", "1")
             .env("BATON_RUNTIME_DIR", self.p("run"))
             .env("BATON_NOTIFY_SINK", "off")
             .env("FAKE_CLAUDE_HOME", self.p("fake-claude"))
@@ -72,6 +74,7 @@ impl Env {
         vec![
             ("BATON_CONFIG".into(), p("config.toml")),
             ("BATON_STATE_DIR".into(), p("state")),
+            ("BATON_NO_UPDATE_CHECK".into(), "1".into()),
             ("BATON_RUNTIME_DIR".into(), p("run")),
             ("BATON_NOTIFY_SINK".into(), "off".into()),
             ("FAKE_CLAUDE_HOME".into(), p("fake-claude")),

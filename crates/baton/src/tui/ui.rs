@@ -124,9 +124,13 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     let items: Vec<ListItem> = app.rows().iter().map(|r| r.item()).collect();
     let mut state = ListState::default().with_selected(app.cursor_index());
+    let mut projects = Block::default().borders(Borders::ALL).title("Projects");
+    if let Some(v) = &app.update_available {
+        projects = projects.title_bottom(Line::from(format!(" v{v} available ")).right_aligned());
+    }
     f.render_stateful_widget(
         List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Projects"))
+            .block(projects)
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
         list_area,
         &mut state,
@@ -319,6 +323,15 @@ mod tests {
             now,
         );
         app
+    }
+
+    #[test]
+    fn update_notice_is_shown_only_when_available() {
+        let mut app = app_with_session();
+        assert!(!render(&app).contains("available"));
+        app.update_available = Some("0.3.0".into());
+        let out = render(&app);
+        assert!(out.contains(" v0.3.0 available "), "{out}");
     }
 
     #[test]

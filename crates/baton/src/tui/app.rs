@@ -105,6 +105,8 @@ pub struct App {
     pub pacer: RenderPacer,
     /// Last error reported by the daemon.
     pub notice: Option<String>,
+    /// A newer release (version without the leading `v`), when one is known.
+    pub update_available: Option<String>,
     /// The session a pending `Restart <repo>? [y/N]` prompt is about.
     confirm: Option<SessionId>,
     /// Why the config file could not be loaded, for the `ConfigError` overlay.
@@ -165,6 +167,7 @@ impl App {
             layout,
             pacer,
             notice: None,
+            update_available: None,
             confirm: None,
             config_error: None,
             terminal_focused: true,

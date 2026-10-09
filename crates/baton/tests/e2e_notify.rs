@@ -36,6 +36,7 @@ impl Env {
         vec![
             ("BATON_CONFIG".into(), p("config.toml")),
             ("BATON_STATE_DIR".into(), p("state")),
+            ("BATON_NO_UPDATE_CHECK".into(), "1".into()),
             ("BATON_RUNTIME_DIR".into(), p("run")),
             ("BATON_NOTIFY_SINK".into(), "log".into()),
             ("FAKE_CLAUDE_HOME".into(), p("fake-claude")),

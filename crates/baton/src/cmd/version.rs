@@ -21,7 +21,7 @@ pub fn render(checked: &Checked) -> String {
     }
 }
 
-fn config_flag() -> bool {
+pub(crate) fn config_flag() -> bool {
     let getenv = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     paths::config_file()
         .ok()
