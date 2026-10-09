@@ -205,6 +205,44 @@ fn fresh_cache_with_newer_release_warns_without_connecting() -> Result<()> {
 }
 
 #[test]
+fn newer_without_url_has_no_dangling_separator() -> Result<()> {
+    let env = Env::new("")?;
+    env.write_cache(60, true, Some("v99.0.0"))?;
+    let file = env.dir.path().join("state/update-check.json");
+    let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    json["html_url"] = serde_json::Value::Null;
+    std::fs::write(&file, serde_json::to_vec(&json)?)?;
+    let out = env.doctor_with(&["--no-probe"], &[("BATON_NO_UPDATE_CHECK", "")])?;
+    assert_eq!(
+        version_lines(&out),
+        [format!(
+            "WARN version: 99.0.0 is available (you have {VER})"
+        )]
+    );
+    Ok(())
+}
+
+#[test]
+fn fresh_failed_cache_with_known_release_still_warns_last_check_failed() -> Result<()> {
+    let env = Env::new("")?;
+    env.write_cache(60, false, Some("v99.0.0"))?;
+    let srv = ReleaseServer::start(Reply::ok(r#"{"tag_name":"v99.0.0"}"#))?;
+    let out = env.doctor_with(
+        &["--no-probe"],
+        &[
+            ("BATON_NO_UPDATE_CHECK", ""),
+            ("BATON_UPDATE_URL", &srv.url()),
+        ],
+    )?;
+    assert_eq!(
+        version_lines(&out),
+        ["WARN version: could not check for updates (last check failed)".to_owned()]
+    );
+    assert_eq!(srv.connections(), 0);
+    Ok(())
+}
+
+#[test]
 fn fresh_cache_up_to_date_passes() -> Result<()> {
     let env = Env::new("")?;
     env.write_cache(60, true, Some(&format!("v{VER}")))?;

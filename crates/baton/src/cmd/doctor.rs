@@ -8,7 +8,7 @@
 
 use crate::client::{self, ClientError};
 use crate::daemon::spawn::build_command;
-use crate::update;
+use crate::update::{self, Reason};
 use baton_core::config::{Config, SessionSpec};
 use baton_core::hooks::shell_quote;
 use baton_core::paths;
@@ -487,25 +487,31 @@ fn check_version(report: &mut Report) {
             Outcome::UpToDate => {
                 report.emit(Level::Pass, format!("version: {VERSION} (latest)"));
             }
-            Outcome::Newer { latest } => {
-                let url = checked.html_url.as_deref().unwrap_or("");
-                report.emit(
-                    Level::Warn,
-                    format!(
-                        "version: {} is available (you have {VERSION}): {}",
-                        sanitize(&latest),
-                        sanitize(url)
-                    ),
-                );
-            }
+            Outcome::Newer { latest } => report.emit(
+                Level::Warn,
+                format!(
+                    "version: {}",
+                    update::describe_newer(
+                        &sanitize(&latest),
+                        VERSION,
+                        checked.html_url.as_deref().map(sanitize).as_deref()
+                    )
+                ),
+            ),
             Outcome::Unknown(why) => report.emit(
                 Level::Warn,
-                format!("version: could not check for updates ({})", sanitize(&why)),
+                format!(
+                    "version: {}",
+                    update::describe_failure(&sanitize(&why), Reason::Parens)
+                ),
             ),
         },
         Err(why) => report.emit(
             Level::Warn,
-            format!("version: could not check for updates ({})", sanitize(&why)),
+            format!(
+                "version: {}",
+                update::describe_failure(&sanitize(&why), Reason::Parens)
+            ),
         ),
     }
 }

@@ -163,6 +163,36 @@ fn tui_shows_notice_from_fresh_cache_without_connecting() -> Result<()> {
 }
 
 #[test]
+fn tui_shows_known_update_from_fresh_failed_cache() -> Result<()> {
+    let server = ReleaseServer::start(Reply::status(500))?;
+    let env = Env::new(server.url())?;
+    std::fs::create_dir_all(env.dir.path().join("state"))?;
+    std::fs::set_permissions(
+        env.dir.path().join("state"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    std::fs::write(
+        env.cache_path(),
+        format!(
+            r#"{{"checked_at":{now},"latest":"v99.0.0","html_url":null,"etag":"\"e\"","ok":false}}"#
+        ),
+    )?;
+    std::fs::set_permissions(
+        env.cache_path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )?;
+    let mut d = env.tui()?;
+    wait(&d, "v99.0.0 available")?;
+    d.send(b"q")?;
+    assert_eq!(d.wait_exit(Duration::from_secs(5))?, 0);
+    assert_eq!(server.connections(), 0);
+    Ok(())
+}
+
+#[test]
 fn tui_is_silent_on_404() -> Result<()> {
     let server = ReleaseServer::start(Reply::status(404))?;
     let env = Env::new(server.url())?;

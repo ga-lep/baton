@@ -174,6 +174,36 @@ fn request_headers_and_no_authorization() -> Result<()> {
 }
 
 #[test]
+fn failed_check_keeps_known_release_and_etag() -> Result<()> {
+    let env = Env::new()?;
+    let mut reply = Reply::ok(release("v99.0.0"));
+    reply.etag = Some("\"abc\"".into());
+    let srv = ReleaseServer::start(reply)?;
+    env.run(&srv.url(), &["--check"], &[])?;
+
+    let down = ReleaseServer::start(Reply::status(500))?;
+    let out = env.run(&down.url(), &["--check"], &[])?;
+    assert_eq!(out.status.code(), Some(1));
+    let cache = env.cache()?;
+    assert_eq!(cache["ok"], false);
+    assert_eq!(cache["latest"], "v99.0.0");
+    assert_eq!(cache["html_url"], URL);
+    assert_eq!(cache["etag"], "\"abc\"");
+
+    let again = ReleaseServer::start(Reply::status(304))?;
+    let out = env.run(&again.url(), &["--check"], &[])?;
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(stdout(&out).contains("99.0.0 is available"));
+    assert!(
+        again.requests()[0]
+            .iter()
+            .any(|(k, v)| k == "if-none-match" && v == "\"abc\"")
+    );
+    assert_eq!(env.cache()?["ok"], true);
+    Ok(())
+}
+
+#[test]
 fn etag_is_sent_and_304_keeps_latest() -> Result<()> {
     let env = Env::new()?;
     let mut reply = Reply::ok(release("v99.0.0"));

@@ -106,6 +106,32 @@ fn https_only(url: &str) -> bool {
     })
 }
 
+/// `<latest> is available (you have <current>)`, followed by `: <url>` only
+/// when there is a release page.
+pub fn describe_newer(latest: &str, current: &str, html_url: Option<&str>) -> String {
+    match html_url.filter(|u| !u.is_empty()) {
+        Some(url) => format!("{latest} is available (you have {current}): {url}"),
+        None => format!("{latest} is available (you have {current})"),
+    }
+}
+
+/// How the reason of a failed check is attached to the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    /// `could not check for updates: <why>`
+    Colon,
+    /// `could not check for updates (<why>)`
+    Parens,
+}
+
+/// `could not check for updates` plus the reason, in the given style.
+pub fn describe_failure(why: &str, style: Reason) -> String {
+    match style {
+        Reason::Colon => format!("could not check for updates: {why}"),
+        Reason::Parens => format!("could not check for updates ({why})"),
+    }
+}
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -153,9 +179,10 @@ fn check_inner(force: bool, timeout: Duration) -> Result<Checked, String> {
         .ok()
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| DEFAULT_URL.to_owned());
+    // A failed check keeps the last known release, so its ETag stays valid.
     let etag = cached
         .as_ref()
-        .filter(|c| c.ok)
+        .filter(|c| c.latest.is_some())
         .and_then(|c| c.etag.as_deref());
     let result = fetch(&url, timeout, etag).and_then(|f| match f {
         Fetched::Release {
@@ -171,9 +198,10 @@ fn check_inner(force: bool, timeout: Duration) -> Result<Checked, String> {
         }),
         Fetched::NotModified => cached
             .clone()
-            .filter(|c| c.ok && c.latest.is_some())
+            .filter(|c| c.latest.is_some())
             .map(|c| Cache {
                 checked_at: now,
+                ok: true,
                 ..c
             })
             .ok_or_else(|| "unexpected 304 without a cached release".to_owned()),
@@ -187,12 +215,18 @@ fn check_inner(force: bool, timeout: Duration) -> Result<Checked, String> {
         }
         Err(reason) => {
             if dir_ok {
+                // Keep what was known (release, URL, ETag): one transient
+                // failure must not hide a known update nor drop the ETag.
                 let _ = Cache {
                     checked_at: now,
-                    latest: None,
-                    html_url: None,
-                    etag: None,
                     ok: false,
+                    ..cached.unwrap_or(Cache {
+                        checked_at: now,
+                        latest: None,
+                        html_url: None,
+                        etag: None,
+                        ok: false,
+                    })
                 }
                 .store(&path);
             }
@@ -230,9 +264,9 @@ pub fn startup() -> Startup {
         .is_ok()
         .then(|| Cache::load(&path))
         .flatten();
+    // A failed check still carries the last known release.
     let available = cached
         .as_ref()
-        .filter(|c| c.ok)
         .and_then(|c| from_cache(c).ok())
         .and_then(|c| newer(&c.outcome));
     let fresh = cached.is_some_and(|c| c.is_fresh(now_secs()));
@@ -294,6 +328,28 @@ mod tests {
         let rx = spawn_with(|| Some(crate::tui::terminal_guard::hook_should_restore().to_string()));
         assert_eq!(rx.blocking_recv().ok(), Some(Some("false".to_owned())));
         assert!(crate::tui::terminal_guard::hook_should_restore());
+    }
+
+    #[test]
+    fn describe_omits_separator_without_url() {
+        assert_eq!(
+            describe_newer("1.2.3", "1.0.0", Some("https://x/y")),
+            "1.2.3 is available (you have 1.0.0): https://x/y"
+        );
+        for url in [None, Some("")] {
+            assert_eq!(
+                describe_newer("1.2.3", "1.0.0", url),
+                "1.2.3 is available (you have 1.0.0)"
+            );
+        }
+        assert_eq!(
+            describe_failure("boom", Reason::Colon),
+            "could not check for updates: boom"
+        );
+        assert_eq!(
+            describe_failure("boom", Reason::Parens),
+            "could not check for updates (boom)"
+        );
     }
 
     #[test]

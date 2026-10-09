@@ -1,6 +1,6 @@
 //! `baton version [--check]`.
 
-use crate::update::{self, Checked};
+use crate::update::{self, Checked, Reason};
 use baton_core::config::Config;
 use baton_core::paths;
 use baton_core::update::Outcome;
@@ -13,14 +13,11 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn render(checked: &Checked) -> String {
     match &checked.outcome {
         Outcome::UpToDate => format!("baton {VERSION} is up to date"),
-        Outcome::Newer { latest } => {
-            let url = checked
-                .html_url
-                .as_deref()
-                .map_or(String::new(), |u| format!(": {u}"));
-            format!("baton {latest} is available (you have {VERSION}){url}")
-        }
-        Outcome::Unknown(why) => format!("could not check for updates: {why}"),
+        Outcome::Newer { latest } => format!(
+            "baton {}",
+            update::describe_newer(latest, VERSION, checked.html_url.as_deref())
+        ),
+        Outcome::Unknown(why) => update::describe_failure(why, Reason::Colon),
     }
 }
 
@@ -58,7 +55,7 @@ pub fn run(check: bool) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(reason) => {
-            println!("could not check for updates: {reason}{note}");
+            println!("{}{note}", update::describe_failure(&reason, Reason::Colon));
             ExitCode::FAILURE
         }
     }
