@@ -66,3 +66,4 @@ Task 17: started
 Task 17: complete (221452a..11c8de7, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/baton-mvp.evidence/task-17.md
   notes: M5 reached (fake-claude only; real claude not exercised). PROTOCOL_VERSION 5; pricing schema [pricing.models."<prefix>"] with deny_unknown_fields (old flat layout now a config error); no price -> cost n/a; transcript confined to <CLAUDE_CONFIG_DIR|~/.claude>/projects (O_NOFOLLOW+fstat+/proc/self/fd); [sec Low] add O_NOCTTY|O_CLOEXEC to transcript open (dir-component swap could make daemon open a tty -> controlling terminal -> SIGHUP); consider openat2 RESOLVE_BENEATH; [sec Low] dedup ids unbounded in length (cap 128 or hash); hard links in projects/ pass (nlink>1/uid check); [sec Info] sparse huge file busy-loops tailer; Cf chars in clean(); [review] tailer unit tests not run red first (mutation-checked)
+Task 18: started
