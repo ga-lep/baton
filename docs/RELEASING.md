@@ -16,14 +16,18 @@ The version source of truth is `[workspace.package] version` in `Cargo.toml`.
 
 Pushing a tag that matches `v[0-9]+.[0-9]+.[0-9]+*` starts
 `.github/workflows/release.yml`. A tag with a suffix such as `v0.2.0-rc.1`
-publishes a pre-release. The jobs run in this order:
+publishes a pre-release. The `Cargo.toml` version must carry the same suffix
+(for example `0.3.0-rc.1`) before you tag `v0.3.0-rc.1`, because `verify`
+compares the two exactly. The jobs run in this order:
 
 1. `gate`: the CI workflow (fmt, clippy, tests).
 2. `verify`: fails unless the tag minus its leading `v` equals the workspace
    version (read with `cargo metadata --no-deps --format-version 1`).
 3. `build`: builds `x86_64-unknown-linux-musl` and `x86_64-unknown-linux-gnu`,
-   smoke-tests each binary (`--version`, `baton version`, and "statically
-   linked" for musl) and uploads the archives.
+   smoke-tests each binary (`--version` and `baton version`) and uploads the
+   archives. For musl the smoke test also requires `file` to report
+   `statically linked` or `static-pie linked`, and `readelf` to show no
+   `INTERP` program header and no `NEEDED` entries.
 4. `publish`: tag refs only, the only job with `contents: write`. It writes
    `SHA256SUMS` and runs `gh release create` with `--verify-tag` and
    `--generate-notes`.
@@ -84,10 +88,9 @@ the background check off, set `BATON_NO_UPDATE_CHECK=1` in the environment or
 `update_check = false` in the config file. The `hook`, `statusline` and daemon
 paths never check.
 
-The repository must be made public before the update check and the public
-downloads work. Until then `baton version --check` reports
-`no public release found`, `baton doctor` shows a WARN, and the TUI shows
-nothing, the same as when offline.
+The check needs a public release to exist. Until one does, `baton version
+--check` reports `no public release found`, `baton doctor` shows a WARN, and
+the TUI shows nothing, the same as when offline.
 
 ## License
 
