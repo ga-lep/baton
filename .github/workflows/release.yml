@@ -42,12 +42,13 @@ jobs:
         env:
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           version=$(cargo metadata --no-deps --format-version 1 \
             | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"]=="baton"))')
           echo "Workspace version: $version"
-          if [[ "$REF" == refs/tags/v* ]]; then
+          if [[ "$EVENT" == push && "$REF" == refs/tags/v* ]]; then
             if [[ "${REF_NAME#v}" != "$version" ]]; then
               echo "::error::tag $REF_NAME does not match workspace version $version"
               exit 1
@@ -93,10 +94,12 @@ jobs:
           bin="target/$TARGET/release/baton"
           out=$("$bin" --version)
           echo "$out"
-          [[ "$out" == "baton $VERSION"* ]] || { echo "::error::unexpected --version output"; exit 1; }
+          [[ "$out" == "baton $VERSION" ]] || { echo "::error::unexpected --version output"; exit 1; }
           BATON_NO_UPDATE_CHECK=1 "$bin" version
           if [[ "$TARGET" == *-musl ]]; then
-            file "$bin" | tee /dev/stderr | grep -q 'statically linked'
+            desc=$(file "$bin")
+            echo "$desc"
+            grep -q 'statically linked' <<<"$desc" || { echo "::error::binary is not statically linked"; exit 1; }
           fi
       - name: Package
         env:
@@ -124,7 +127,7 @@ jobs:
   publish:
     name: publish
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -134,13 +137,23 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
+          pattern: baton-*
           merge-multiple: true
       - name: Write SHA256SUMS
         working-directory: dist
         run: |
           set -euo pipefail
+          archives=$(find . -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
+          sums=$(find . -maxdepth 1 -type f -name '*.tar.gz.sha256' | wc -l)
+          total=$(find . -type f | wc -l)
+          if [[ "$archives" != 2 || "$sums" != 2 || "$total" != 4 ]]; then
+            echo "::error::unexpected dist contents"
+            ls -lR .
+            exit 1
+          fi
           sha256sum -- *.tar.gz > SHA256SUMS
           cat SHA256SUMS
+          [[ $(find . -type f | wc -l) == 5 ]] || { echo "::error::dist must hold exactly 5 files"; exit 1; }
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

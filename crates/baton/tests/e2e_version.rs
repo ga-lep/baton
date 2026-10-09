@@ -35,6 +35,10 @@ impl Env {
             .env("BATON_STATE_DIR", self.dir.path().join("state"))
             .env("BATON_RUNTIME_DIR", self.dir.path().join("run"))
             .env("BATON_UPDATE_URL", url)
+            .env_remove("BATON_NO_UPDATE_CHECK")
+            .env_remove("XDG_STATE_HOME")
+            .env_remove("XDG_RUNTIME_DIR")
+            .env_remove("XDG_CONFIG_HOME")
             .stdin(Stdio::null());
         for (k, v) in extra {
             cmd.env(k, v);
@@ -53,7 +57,10 @@ fn release(tag: &str) -> String {
 
 #[test]
 fn help_lists_version() -> Result<()> {
-    let out = Command::new(bin_path("baton")?).arg("--help").output()?;
+    let out = Command::new(bin_path("baton")?)
+        .arg("--help")
+        .env("BATON_NO_UPDATE_CHECK", "1")
+        .output()?;
     assert!(stdout(&out).contains("version"));
     Ok(())
 }
@@ -250,6 +257,10 @@ fn state_dir_and_cache_are_private_and_doctor_passes() -> Result<()> {
             .env("BATON_STATE_DIR", env.dir.path().join("state"))
             .env("BATON_RUNTIME_DIR", env.dir.path().join("run"))
             .env("BATON_UPDATE_URL", &url)
+            .env_remove("BATON_NO_UPDATE_CHECK")
+            .env_remove("XDG_STATE_HOME")
+            .env_remove("XDG_RUNTIME_DIR")
+            .env_remove("XDG_CONFIG_HOME")
             .stdin(Stdio::null())
             .output()?)
     };

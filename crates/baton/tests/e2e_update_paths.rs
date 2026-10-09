@@ -51,6 +51,9 @@ impl Env {
             .env_remove("BATON_SESSION")
             .env_remove("BATON_SOCK")
             .env_remove("BATON_NO_UPDATE_CHECK")
+            .env_remove("XDG_STATE_HOME")
+            .env_remove("XDG_RUNTIME_DIR")
+            .env_remove("XDG_CONFIG_HOME")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

@@ -13,6 +13,8 @@ fn drive(envs: &[(&str, &Path)], steps: &[&str], cmd: &[&str]) -> Result<Output>
         c.arg("--step").arg(s);
     }
     c.arg("--").arg(bin_path("baton")?).args(cmd);
+    c.env("BATON_NO_UPDATE_CHECK", "1")
+        .env_remove("BATON_UPDATE_URL");
     for (k, v) in envs {
         c.env(k, v);
     }
