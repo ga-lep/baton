@@ -320,6 +320,8 @@ pub enum NormalAction {
     Activate,
     /// Open the project under the cursor.
     OpenProject,
+    /// Collapse or expand the project under the cursor.
+    ToggleCollapse,
     /// Select session `n` (1..=9) of the current project.
     Select(u8),
     /// Jump to the next session needing attention.
@@ -350,9 +352,9 @@ impl Action for NormalAction {
     fn all() -> Vec<Self> {
         use NormalAction::{
             Activate, Editor, Help, Live, MoveDown, MoveUp, NextAttention, OpenProject, PageDown,
-            PageUp, Quit, Restart, ScrollDown, ScrollUp, Select,
+            PageUp, Quit, Restart, ScrollDown, ScrollUp, Select, ToggleCollapse,
         };
-        let mut v = vec![MoveDown, MoveUp, Activate, OpenProject];
+        let mut v = vec![MoveDown, MoveUp, Activate, OpenProject, ToggleCollapse];
         v.extend((1..=9).map(Select));
         v.extend([
             NextAttention,
@@ -375,6 +377,7 @@ impl Action for NormalAction {
             Self::MoveUp => "move_up".to_owned(),
             Self::Activate => "activate".to_owned(),
             Self::OpenProject => "open_project".to_owned(),
+            Self::ToggleCollapse => "toggle_collapse".to_owned(),
             Self::Select(n) => format!("select_{n}"),
             Self::NextAttention => "next_attention".to_owned(),
             Self::Restart => "restart".to_owned(),
@@ -396,6 +399,7 @@ impl Action for NormalAction {
             Self::MoveUp => vec!["k", "up"],
             Self::Activate => vec!["enter", "l"],
             Self::OpenProject => vec!["o"],
+            Self::ToggleCollapse => vec!["space"],
             Self::Select(n) => DIGITS
                 .get(usize::from(n).wrapping_sub(1))
                 .map_or_else(Vec::new, |d| vec![*d]),
@@ -811,6 +815,7 @@ mod tests {
         assert_eq!(n("enter"), Some(NormalAction::Activate));
         assert_eq!(n("l"), Some(NormalAction::Activate));
         assert_eq!(n("o"), Some(NormalAction::OpenProject));
+        assert_eq!(n("space"), Some(NormalAction::ToggleCollapse));
         assert_eq!(n("3"), Some(NormalAction::Select(3)));
         assert_eq!(n("n"), Some(NormalAction::NextAttention));
         assert_eq!(n("r"), Some(NormalAction::Restart));
