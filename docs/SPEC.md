@@ -115,6 +115,7 @@ In focus mode, the main panel border is highlighted and the bottom bar reads
 | `j` / `k`, `↓` / `↑` | Move selection (projects and sessions) |
 | `Enter` / `l` | On session: focus its pane · on closed project: open it |
 | `o` | Open project under cursor (start its sessions) |
+| `Space` | Collapse / expand the project under the cursor (`▸ name  (N)` while collapsed; highlighted if a hidden session needs attention). Jumping to a hidden session (`n`, `1`–`9`) expands it |
 | `1`..`9` | Select session N of the current project |
 | `n` | Jump to next session needing attention |
 | `r` | Restart selected session (`--resume` same conversation) |

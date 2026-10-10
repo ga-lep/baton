@@ -6,6 +6,7 @@ use baton_core::paths;
 use baton_proto::{SessionId, SessionInfo, Status};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::ListItem;
+use std::collections::BTreeSet;
 
 use super::labels::{badge, status_label};
 
@@ -30,6 +31,10 @@ pub enum Row<'a> {
         open: bool,
         /// Whether any of those sessions is still running.
         live: bool,
+        /// Sessions hidden because the project is collapsed (0 when expanded).
+        hidden: usize,
+        /// Whether one of the hidden sessions needs attention.
+        hidden_attention: bool,
     },
     /// A session under its project; `n` is its 1-based position there.
     Session {
@@ -52,6 +57,7 @@ impl Row<'_> {
     /// The sidebar text of this row.
     pub fn text(&self) -> String {
         match self {
+            Row::Project { name, hidden, .. } if *hidden > 0 => format!("▸ {name}  ({hidden})"),
             Row::Project {
                 name, open: true, ..
             } => format!("▾ {name}"),
@@ -67,14 +73,20 @@ impl Row<'_> {
         }
     }
 
-    /// The style of this row: projects without live sessions are dim and
-    /// sessions that need attention are highlighted.
+    /// The style of this row: projects without live sessions are dim, and
+    /// sessions that need attention are highlighted, as is a collapsed project
+    /// hiding one.
     pub fn style(&self) -> Style {
+        let attention = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
         match self {
+            Row::Project {
+                hidden_attention: true,
+                ..
+            } => attention,
             Row::Project { live: false, .. } => Style::default().add_modifier(Modifier::DIM),
-            Row::Session { info, .. } if needs_attention(info.status) => Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Row::Session { info, .. } if needs_attention(info.status) => attention,
             _ => Style::default(),
         }
     }
@@ -91,8 +103,13 @@ pub fn repo_name(s: &SessionInfo) -> &str {
 }
 
 /// The rows to show: configured projects in config order, then projects the
-/// daemon knows that the config does not (so no session is ever hidden).
-pub fn rows<'a>(projects: &'a [String], sessions: &'a [SessionInfo]) -> Vec<Row<'a>> {
+/// daemon knows that the config does not (so no session is ever lost). The
+/// sessions of `collapsed` projects are counted on the project row instead.
+pub fn rows<'a>(
+    projects: &'a [String],
+    sessions: &'a [SessionInfo],
+    collapsed: &BTreeSet<String>,
+) -> Vec<Row<'a>> {
     let mut names: Vec<&str> = projects.iter().map(String::as_str).collect();
     for s in sessions {
         if !names.contains(&s.project.as_str()) {
@@ -102,6 +119,7 @@ pub fn rows<'a>(projects: &'a [String], sessions: &'a [SessionInfo]) -> Vec<Row<
     let mut out = Vec::new();
     for name in names {
         let mine: Vec<&SessionInfo> = sessions.iter().filter(|s| s.project == name).collect();
+        let fold = collapsed.contains(name);
         out.push(Row::Project {
             name,
             // Remembered-only sessions do not make a project open.
@@ -109,7 +127,12 @@ pub fn rows<'a>(projects: &'a [String], sessions: &'a [SessionInfo]) -> Vec<Row<
             live: mine
                 .iter()
                 .any(|s| !matches!(s.status, Status::Exited(_) | Status::Closed)),
+            hidden: if fold { mine.len() } else { 0 },
+            hidden_attention: fold && mine.iter().any(|s| needs_attention(s.status)),
         });
+        if fold {
+            continue;
+        }
         for (i, info) in mine.into_iter().enumerate() {
             out.push(Row::Session { n: i + 1, info });
         }
@@ -172,7 +195,10 @@ mod tests {
             info("z", "/r/zed", Status::Idle),
             info("a", "/r/two", Status::Exited(1)),
         ];
-        let text: Vec<String> = rows(&projects, &sessions).iter().map(Row::text).collect();
+        let text: Vec<String> = rows(&projects, &sessions, &BTreeSet::new())
+            .iter()
+            .map(Row::text)
+            .collect();
         assert_eq!(
             text,
             vec![
@@ -187,13 +213,45 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_projects_hide_their_sessions_and_count_them() {
+        let projects = vec!["a".to_owned(), "b".to_owned()];
+        let sessions = vec![
+            info("a", "/r/one", Status::Running),
+            info("a", "/r/two", Status::Idle),
+            info("b", "/r/three", Status::Idle),
+        ];
+        let collapsed = BTreeSet::from(["a".to_owned()]);
+        let text: Vec<String> = rows(&projects, &sessions, &collapsed)
+            .iter()
+            .map(Row::text)
+            .collect();
+        assert_eq!(text, vec!["▸ a  (2)", "▾ b", "  1 ○ three  idle"]);
+    }
+
+    #[test]
+    fn a_collapsed_project_is_highlighted_when_a_hidden_session_needs_attention() {
+        let projects = vec!["a".to_owned()];
+        let calm = vec![info("a", "/r/one", Status::Idle)];
+        let waiting = vec![info("a", "/r/one", Status::Permission)];
+        let collapsed = BTreeSet::from(["a".to_owned()]);
+        let style = |s: &[SessionInfo]| rows(&projects, s, &collapsed)[0].style();
+        assert_eq!(style(&calm), Style::default());
+        assert_eq!(
+            style(&waiting),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        );
+    }
+
+    #[test]
     fn only_projects_without_live_sessions_are_dim() {
         let projects = vec!["b".to_owned(), "a".to_owned(), "c".to_owned()];
         let sessions = vec![
             info("a", "/r/one", Status::Running),
             info("c", "/r/x", Status::Exited(0)),
         ];
-        let live: Vec<bool> = rows(&projects, &sessions)
+        let live: Vec<bool> = rows(&projects, &sessions, &BTreeSet::new())
             .iter()
             .filter_map(|r| match r {
                 Row::Project { live, .. } => Some(*live),
@@ -212,7 +270,7 @@ mod tests {
             info("a", "/r/r", Status::Running),
             info("a", "/r/u", Status::Unknown),
         ];
-        let styles: Vec<Style> = rows(&["a".to_owned()], &sessions)
+        let styles: Vec<Style> = rows(&["a".to_owned()], &sessions, &BTreeSet::new())
             .iter()
             .skip(1)
             .map(Row::style)
@@ -239,7 +297,7 @@ mod tests {
             info("a", "/r/one", Status::Closed),
             info("b", "/r/two", Status::Idle),
         ];
-        let rows = rows(&projects, &sessions);
+        let rows = rows(&projects, &sessions, &BTreeSet::new());
         let text: Vec<String> = rows.iter().map(Row::text).collect();
         assert_eq!(
             text,

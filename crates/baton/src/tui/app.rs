@@ -3,7 +3,7 @@
 //! Nothing here touches the terminal or the socket, so every behavior is
 //! unit-testable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -86,6 +86,8 @@ pub struct App {
     mirrors: HashMap<SessionId, Mirror>,
     /// Configured project names, in config order.
     projects: Vec<String>,
+    /// Projects whose sessions are hidden in the sidebar.
+    collapsed: BTreeSet<String>,
     /// Sidebar cursor; `None` until there is a row to put it on.
     cursor: Option<Cursor>,
     /// Whether the user moved the cursor (until then it follows the data).
@@ -156,6 +158,7 @@ impl App {
             sessions: Vec::new(),
             mirrors: HashMap::new(),
             projects: Vec::new(),
+            collapsed: BTreeSet::new(),
             cursor: None,
             moved: false,
             current: None,
@@ -260,7 +263,7 @@ impl App {
 
     /// Configured projects merged with the sessions, as sidebar rows.
     pub fn rows(&self) -> Vec<Row<'_>> {
-        sidebar::rows(&self.projects, &self.sessions)
+        sidebar::rows(&self.projects, &self.sessions, &self.collapsed)
     }
 
     /// The sidebar cursor.
@@ -476,13 +479,30 @@ impl App {
         self.current = from_cursor.or(keep).or(first);
     }
 
-    /// Moves the cursor to `row`; a session row also becomes the shown session.
+    /// Moves the cursor to `row`; a session row also becomes the shown session
+    /// and expands its project if it was collapsed.
     fn go_to(&mut self, cursor: Cursor) {
         if let Cursor::Session(id) = &cursor {
             self.current = Some(id.clone());
+            if let Some(s) = self.sessions.iter().find(|s| &s.id == id) {
+                self.collapsed.remove(&s.project);
+            }
         }
         self.cursor = Some(cursor);
         self.moved = true;
+    }
+
+    /// Space: collapses or expands the cursor's project. From a session row the
+    /// cursor moves up to the project row, which stays visible.
+    fn toggle_collapse(&mut self) {
+        let Some(name) = self.cursor_project() else {
+            return;
+        };
+        if !self.collapsed.remove(&name) {
+            self.collapsed.insert(name.clone());
+            self.cursor = Some(Cursor::Project(name));
+            self.moved = true;
+        }
     }
 
     /// The project the cursor is in.
@@ -510,6 +530,10 @@ impl App {
             NormalAction::OpenProject => self
                 .cursor_project()
                 .map_or_else(Vec::new, |n| self.open_project(n)),
+            NormalAction::ToggleCollapse => {
+                self.toggle_collapse();
+                Vec::new()
+            }
             NormalAction::Select(n) => {
                 self.pick(usize::from(n));
                 Vec::new()
@@ -618,15 +642,16 @@ impl App {
     }
 
     /// Jumps to the next session needing attention, or says there is none.
+    /// Sessions of collapsed projects count too; jumping to one expands it.
     fn next_attention(&mut self) {
-        let sessions: Vec<(SessionId, Status)> = self
-            .rows()
-            .iter()
-            .filter_map(|r| match r {
-                Row::Session { info, .. } => Some((info.id.clone(), info.status)),
-                Row::Project { .. } => None,
-            })
-            .collect();
+        let sessions: Vec<(SessionId, Status)> =
+            sidebar::rows(&self.projects, &self.sessions, &BTreeSet::new())
+                .iter()
+                .filter_map(|r| match r {
+                    Row::Session { info, .. } => Some((info.id.clone(), info.status)),
+                    Row::Project { .. } => None,
+                })
+                .collect();
         let order: Vec<Status> = sessions.iter().map(|(_, s)| *s).collect();
         let current = self
             .current

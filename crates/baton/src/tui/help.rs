@@ -105,8 +105,8 @@ mod tests {
         let (normal, focus) = columns(&Keymap::default());
         assert_eq!(
             normal.len(),
-            15 + 8,
-            "15 actions with select_1..9: {normal:?}"
+            16 + 8,
+            "16 actions with select_1..9: {normal:?}"
         );
         assert_eq!(focus.len(), 2 + 9);
     }

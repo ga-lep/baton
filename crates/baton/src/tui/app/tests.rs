@@ -1041,3 +1041,62 @@ fn quota_updates_reach_the_session() {
         .expect("session");
     assert_eq!(s.quota, Some(quota));
 }
+
+fn row_texts(app: &App) -> Vec<String> {
+    app.rows().iter().map(Row::text).collect()
+}
+
+#[test]
+fn space_on_a_project_collapses_and_expands_it() {
+    let mut app = tree_app();
+    app.on_event(ch('k'), HOST);
+    cursor_is(&app, Cursor::Project("x".into()));
+    app.on_event(ch(' '), HOST);
+    assert_eq!(row_texts(&app), ["▸ x  (2)", "▸ y  (closed)"]);
+    cursor_is(&app, Cursor::Project("x".into()));
+    // j skips the hidden sessions.
+    app.on_event(ch('j'), HOST);
+    cursor_is(&app, Cursor::Project("y".into()));
+    app.on_event(ch('k'), HOST);
+    app.on_event(ch(' '), HOST);
+    assert_eq!(row_texts(&app).len(), 4);
+    assert_eq!(row_texts(&app)[0], "▾ x");
+}
+
+#[test]
+fn space_on_a_session_collapses_its_project_onto_the_project_row() {
+    let mut app = tree_app();
+    app.on_event(ch('j'), HOST);
+    cursor_is(&app, Cursor::Session(sid("x//b")));
+    app.on_event(ch(' '), HOST);
+    cursor_is(&app, Cursor::Project("x".into()));
+    assert_eq!(row_texts(&app)[0], "▸ x  (2)");
+    // The main panel keeps showing the session.
+    assert_eq!(shown(&app), Some("x//b"));
+}
+
+#[test]
+fn selecting_a_hidden_session_expands_its_project() {
+    let mut app = tree_app();
+    app.on_event(ch(' '), HOST);
+    app.on_event(ch('2'), HOST);
+    cursor_is(&app, Cursor::Session(sid("x//b")));
+    assert_eq!(row_texts(&app)[0], "▾ x");
+}
+
+#[test]
+fn next_attention_reaches_into_a_collapsed_project() {
+    let mut app = tree_app();
+    app.on_daemon(
+        DaemonMsg::StatusChanged {
+            session: sid("x//b"),
+            status: Status::YourTurn,
+        },
+        Instant::now(),
+    );
+    app.on_event(ch(' '), HOST);
+    assert_eq!(row_texts(&app)[0], "▸ x  (2)");
+    app.on_event(ch('n'), HOST);
+    cursor_is(&app, Cursor::Session(sid("x//b")));
+    assert_eq!(row_texts(&app)[0], "▾ x");
+}
