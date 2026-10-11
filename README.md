@@ -23,6 +23,20 @@ The checksum only proves the download is intact, not who built it. See
 [docs/RELEASING.md](https://github.com/ga-lep/baton/blob/main/docs/RELEASING.md)
 for the other build and manual steps.
 
+## Configuration
+
+Baton reads `~/.config/baton/config.toml` (or `$XDG_CONFIG_HOME/baton/config.toml`;
+set `BATON_CONFIG` to use another path). Start from the annotated example:
+
+```sh
+mkdir -p ~/.config/baton
+curl -fsSL https://raw.githubusercontent.com/ga-lep/baton/main/examples/config.toml \
+  -o ~/.config/baton/config.toml
+```
+
+Then edit the `[[projects]]` entries to point at your repos. See
+[examples/config.toml](examples/config.toml) for every option.
+
 ## Updates
 
 Run `baton version --check` to see whether a newer release exists.
