@@ -1,0 +1,56 @@
+# Example Baton config.
+#
+# Copy this file to ~/.config/baton/config.toml (or $XDG_CONFIG_HOME/baton/config.toml,
+# or point BATON_CONFIG at any path) and edit it. Every setting is optional except
+# the projects you want to see in the sidebar. `~` and `$VAR` are expanded in paths,
+# commands and env values.
+
+editor = "code {path}"            # {path} = repo dir; spawned detached (default: "xdg-open {path}")
+notifications = true              # desktop notifications when a session needs you
+scrollback_lines = 10000          # per-session scrollback cap
+# statusline = "~/bin/my-statusline.sh"   # your own status line inside sessions
+# update_check = false            # opt out of the background release check
+
+# Profiles pick the command and environment a session runs with.
+# "default" (plain `claude`) exists without being declared.
+[profiles.work]
+command = "claude"
+
+[profiles.personal]
+command = "claude"
+env = { CLAUDE_CONFIG_DIR = "~/.claude-personal" }
+
+# A project is a named group of repos; opening it starts one `claude` per repo.
+[[projects]]
+name = "backend"
+profile = "work"                  # default profile for this project's repos
+repos = [
+  { path = "~/code/api" },
+  { path = "~/code/worker", args = ["--model", "opus"] },        # extra claude args
+  { path = "~/code/infra", profile = "personal" },               # per-repo override
+]
+
+[[projects]]
+name = "blog"
+profile = "personal"
+repos = [{ path = "~/code/blog" }]
+
+# Prices in $/MTok, used only for the "est." cost in the info panel.
+[pricing]
+default = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 }
+# Per-model overrides, keyed by model id prefix:
+# [pricing.models."claude-opus"]
+# input = 15.0
+# output = 75.0
+# cache_read = 1.5
+# cache_write = 18.75
+
+# Remap keys per mode. Press ? in Baton for the full list of actions.
+[keybindings.normal]
+next_attention = "n"
+toggle_collapse = "space"
+restart = "r"
+
+[keybindings.focus]
+unfocus = "ctrl-\\"
+next_attention = "alt-n"

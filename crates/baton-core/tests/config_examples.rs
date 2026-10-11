@@ -261,3 +261,11 @@ fn update_check_must_be_a_bool() {
 fn unknown_top_level_key_still_rejected() {
     assert!(parse("update_chek = true").is_err());
 }
+
+#[test]
+fn shipped_example_config_parses() {
+    let text = include_str!("../../../examples/config.toml");
+    let env = |k: &str| (k == "HOME").then(|| "/home/u".to_owned());
+    let cfg = Config::parse(text, &env).expect("examples/config.toml must stay valid");
+    assert_eq!(cfg.projects.len(), 2);
+}
