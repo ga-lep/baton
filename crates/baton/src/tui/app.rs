@@ -325,7 +325,9 @@ impl App {
         self.notice = None;
         self.confirm = None;
         self.config_error = None;
-        self.fullscreen = false;
+        // Mirrors are gone, so only the layout and size need restoring; the
+        // attach already announced `size()` and the Resize effect is moot here.
+        let _ = self.leave_fullscreen();
         self.sent_view = None;
         self.pacer.mark_dirty();
     }
@@ -352,7 +354,7 @@ impl App {
 
     /// The daemon connection is gone.
     pub fn on_disconnected(&mut self) {
-        self.fullscreen = false;
+        let _ = self.leave_fullscreen(); // no connection to resize
         self.mode = Mode::Normal;
         self.overlay = Overlay::Disconnected;
         self.pacer.mark_dirty();
@@ -360,7 +362,7 @@ impl App {
 
     /// The daemon speaks protocol version `daemon`.
     pub fn on_mismatch(&mut self, daemon: u32) {
-        self.fullscreen = false;
+        let _ = self.leave_fullscreen(); // no connection to resize
         self.mode = Mode::Normal;
         self.overlay = Overlay::VersionMismatch { daemon };
         self.pacer.mark_dirty();
@@ -370,6 +372,9 @@ impl App {
     /// `Output` never yields an `Input`.
     pub fn on_daemon(&mut self, msg: DaemonMsg, now: Instant) -> Vec<Effect> {
         let mut effects = self.apply_daemon(msg, now);
+        if self.fullscreen && self.selected_session().is_none() {
+            effects.extend(self.leave_fullscreen());
+        }
         self.sync_view(&mut effects);
         effects
     }
@@ -588,6 +593,15 @@ impl App {
     /// Whether the host terminal should report mouse events to baton.
     pub fn wants_mouse_capture(&self) -> bool {
         !self.fullscreen
+    }
+
+    /// Leaves the fullscreen view, restoring the normal layout and panel size.
+    fn leave_fullscreen(&mut self) -> Vec<Effect> {
+        if !self.fullscreen {
+            return Vec::new();
+        }
+        self.fullscreen = false;
+        self.fit(self.host)
     }
 
     /// Flips the fullscreen view; needs a shown session.
@@ -917,7 +931,7 @@ impl App {
         match self.mode {
             Mode::Normal => match spec.and_then(|s| self.keymap.normal_action(&s)) {
                 Some(a) => self.run_normal(a),
-                None if self.fullscreen && key.code == KeyCode::Esc => self.toggle_fullscreen(),
+                None if self.fullscreen && key.code == KeyCode::Esc => self.leave_fullscreen(),
                 None => Vec::new(),
             },
             Mode::Focus => {

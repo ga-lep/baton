@@ -1200,6 +1200,9 @@ fn connection_changes_clear_fullscreen() {
         app.on_event(ch('z'), HOST);
         f(&mut app);
         assert!(!app.is_fullscreen());
+        assert_eq!(app.layout, layout(HOST));
+        assert_ne!(app.layout.sidebar.width, 0);
+        assert_eq!(app.size(), (37, 86));
     }
 }
 
@@ -1237,4 +1240,15 @@ fn fit_keeps_the_fullscreen_layout() {
     let host = Rect::new(0, 0, 100, 30);
     let fx = app.on_event(Event::Resize(100, 30), host);
     assert_eq!(resizes(&fx), [(29, 100)]);
+}
+
+#[test]
+fn fullscreen_ends_when_the_shown_session_disappears() {
+    let mut app = app();
+    app.on_event(ch('z'), HOST);
+    assert!(app.is_fullscreen());
+    let fx = app.on_daemon(DaemonMsg::SessionList(Vec::new()), Instant::now());
+    assert!(!app.is_fullscreen());
+    assert_eq!(app.layout, layout(HOST));
+    assert_eq!(resizes(&fx), [(37, 86)]);
 }
