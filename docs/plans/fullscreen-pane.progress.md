@@ -14,3 +14,4 @@ Task 4: started
 Task 4: complete (56e565c..3d3f842, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/fullscreen-pane.evidence/task-4.md
   notes: real mouse-drag selection NOT PROVEN (manual check for user). Security Low — 1007h forced on at exit regardless of host's original state (DECRQM query would fix); set ALT_SCROLL_RESET before writing 1007l; SIGTERM/SIGHUP skip restore (pre-existing). Review — restore() calling restore_alt_scroll untested; global ALT_SCROLL_RESET shared by tests; e2e "hi" wait could match pre-existing text
+Task 5: started
