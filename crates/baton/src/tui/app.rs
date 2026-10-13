@@ -581,8 +581,6 @@ impl App {
     }
 
     /// Whether the shown session fills the host above the bottom bar.
-    // Used by the renderer and event loop in the following fullscreen tasks.
-    #[allow(dead_code)]
     pub fn is_fullscreen(&self) -> bool {
         self.fullscreen
     }

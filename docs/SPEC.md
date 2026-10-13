@@ -88,11 +88,11 @@ Target workflow: **2–4 hands-on sessions at a time**, steered closely, one per
 │ cost     ~$4.10 (est.)      ││                                                       │
 │ id       7f3c…a91e          ││                                                       │
 └─────────────────────────────┘└───────────────────────────────────────────────────────┘
- NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  ? help  q quit
+ NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  z fullscreen  ? help  q quit
 ```
 
 In focus mode, the main panel border is highlighted and the bottom bar reads
-`FOCUS │ Ctrl-\ back  Alt-n next-attention  Alt-1..9 session`.
+`FOCUS │ Ctrl-\ back  Alt-n next-attention  Alt-1..9 session  Alt-z fullscreen`.
 
 ### Status badges
 
@@ -122,6 +122,7 @@ In focus mode, the main panel border is highlighted and the bottom bar reads
 | `e` | Open repo in editor |
 | `Ctrl-u` / `Ctrl-d`, `PgUp` / `PgDn` | Scroll session pane scrollback |
 | `G` | Snap pane back to live bottom |
+| `z` / `Alt-z` | Toggle fullscreen: the session pane fills the terminal above the bottom bar (`Esc` also leaves it) |
 | `?` | Help overlay |
 | `q` | Quit TUI (sessions keep running) |
 
@@ -132,6 +133,7 @@ In focus mode, the main panel border is highlighted and the bottom bar reads
 | `Ctrl-\` | Back to normal mode |
 | `Alt-n` | Next attention session (stays in focus mode) |
 | `Alt-1`..`Alt-9` | Switch to session N (stays in focus mode) |
+| `Alt-z` | Toggle fullscreen (stays in focus mode) |
 
 Viewing a session in the main panel marks its `✓ your turn` as seen (→ `○ idle`).
 

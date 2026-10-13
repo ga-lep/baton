@@ -38,6 +38,7 @@ pub fn normal_bar(keymap: &Keymap) -> String {
         (NormalAction::Restart, "restart"),
         (NormalAction::Editor, "editor"),
         (NormalAction::OpenProject, "open project"),
+        (NormalAction::Fullscreen, "fullscreen"),
         (NormalAction::Help, "help"),
         (NormalAction::Quit, "quit"),
     ];
@@ -77,6 +78,9 @@ pub fn focus_bar(keymap: &Keymap) -> String {
         };
         items.push(format!("{range} session"));
     }
+    if let Some(k) = keymap.focus_keys(FocusAction::Fullscreen).first() {
+        items.push(format!("{} fullscreen", label(k)));
+    }
     format!(" FOCUS │ {}", items.join("  "))
 }
 /// Shown when the daemon connection is lost.
@@ -114,6 +118,46 @@ pub fn mismatch_text(daemon: u32) -> String {
 
 /// Draws the whole UI.
 pub fn draw(f: &mut Frame, app: &App) {
+    let l = app.layout;
+    let focus = app.mode == Mode::Focus;
+    if !app.is_fullscreen() {
+        draw_chrome(f, app);
+    }
+    match (app.scroll_view(), app.selected_mirror()) {
+        (Some(v), _) => v.render(l.inner, f.buffer_mut()),
+        (None, Some(m)) => m.screen().render(l.inner, f.buffer_mut(), focus),
+        (None, None) => f.render_widget(
+            Paragraph::new("No sessions. Start a project with `baton debug open <name>`."),
+            l.inner,
+        ),
+    }
+
+    let mode = if focus { "FOCUS" } else { "NORMAL" };
+    let bar = match app.hint {
+        _ if app.confirm_prompt().is_some() => {
+            format!(" NORMAL │ {}", app.confirm_prompt().unwrap_or_default())
+        }
+        _ if app.flash().is_some() => format!(" {mode} │ {}", app.flash().unwrap_or_default()),
+        Some(hint) => format!(" {mode} │ {hint}"),
+        None if focus => focus_bar(app.keymap()),
+        None => normal_bar(app.keymap()),
+    };
+    f.render_widget(
+        Paragraph::new(bar).style(Style::default().add_modifier(Modifier::REVERSED)),
+        l.bar,
+    );
+
+    match app.overlay {
+        Overlay::None => {}
+        Overlay::VersionMismatch { daemon } => modal(f, &mismatch_text(daemon)),
+        Overlay::Disconnected => modal(f, DISCONNECTED_TEXT),
+        Overlay::Help => super::help::draw(f, app.keymap()),
+        Overlay::ConfigError => config_error(f, app.config_error().unwrap_or_default()),
+    }
+}
+
+/// Sidebar, info panel and the bordered main block with its title.
+fn draw_chrome(f: &mut Frame, app: &App) {
     let l = app.layout;
     let focus = app.mode == Mode::Focus;
     let [list_area, info_area] = Split::vertical([
@@ -175,37 +219,6 @@ pub fn draw(f: &mut Frame, app: &App) {
             .title(title),
         l.main,
     );
-    match (app.scroll_view(), app.selected_mirror()) {
-        (Some(v), _) => v.render(l.inner, f.buffer_mut()),
-        (None, Some(m)) => m.screen().render(l.inner, f.buffer_mut(), focus),
-        (None, None) => f.render_widget(
-            Paragraph::new("No sessions. Start a project with `baton debug open <name>`."),
-            l.inner,
-        ),
-    }
-
-    let mode = if focus { "FOCUS" } else { "NORMAL" };
-    let bar = match app.hint {
-        _ if app.confirm_prompt().is_some() => {
-            format!(" NORMAL │ {}", app.confirm_prompt().unwrap_or_default())
-        }
-        _ if app.flash().is_some() => format!(" {mode} │ {}", app.flash().unwrap_or_default()),
-        Some(hint) => format!(" {mode} │ {hint}"),
-        None if focus => focus_bar(app.keymap()),
-        None => normal_bar(app.keymap()),
-    };
-    f.render_widget(
-        Paragraph::new(bar).style(Style::default().add_modifier(Modifier::REVERSED)),
-        l.bar,
-    );
-
-    match app.overlay {
-        Overlay::None => {}
-        Overlay::VersionMismatch { daemon } => modal(f, &mismatch_text(daemon)),
-        Overlay::Disconnected => modal(f, DISCONNECTED_TEXT),
-        Overlay::Help => super::help::draw(f, app.keymap()),
-        Overlay::ConfigError => config_error(f, app.config_error().unwrap_or_default()),
-    }
 }
 
 /// The popup for a config file that failed to load; `message` keeps its line
@@ -439,11 +452,11 @@ mod tests {
         let k = Keymap::default();
         assert_eq!(
             normal_bar(&k),
-            " NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  ? help  q quit"
+            " NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  z fullscreen  ? help  q quit"
         );
         assert_eq!(
             focus_bar(&k),
-            " FOCUS │ Ctrl-\\ back  Alt-n next-attention  Alt-1..9 session"
+            " FOCUS │ Ctrl-\\ back  Alt-n next-attention  Alt-1..9 session  Alt-z fullscreen"
         );
     }
 
@@ -455,6 +468,79 @@ mod tests {
             )),
             Rect::new(0, 0, 120, 40),
         );
+    }
+
+    fn rows(app: &App) -> Vec<String> {
+        render(app).lines().map(str::to_owned).collect()
+    }
+
+    fn fullscreen_app() -> App {
+        let mut app = app_with_session();
+        press(&mut app, 'z');
+        assert!(app.is_fullscreen());
+        app
+    }
+
+    fn assert_borderless(rows: &[String]) {
+        for row in &rows[..39] {
+            assert!(
+                !row.contains("Projects") && !row.contains("Session"),
+                "{row}"
+            );
+            assert!(!row.contains(['┌', '┐', '└', '┘', '│', '─']), "{row}");
+        }
+    }
+
+    #[test]
+    fn fullscreen_draws_only_the_mirror_and_the_bar() {
+        let mut app = fullscreen_app();
+        let r = rows(&app);
+        assert_eq!(r.len(), 40);
+        assert_borderless(&r);
+        assert!(r[0].starts_with("mirrored text"), "{}", r[0]);
+        assert!(r[39].starts_with(" NORMAL │ "), "{}", r[39]);
+        assert!(r[39].contains("z fullscreen"), "{}", r[39]);
+        app.mode = Mode::Focus;
+        let r = rows(&app);
+        assert_borderless(&r);
+        assert!(r[39].starts_with(" FOCUS │ "), "{}", r[39]);
+        assert!(r[39].contains("Alt-z fullscreen"), "{}", r[39]);
+    }
+
+    #[test]
+    fn fullscreen_keeps_confirm_prompt_and_flash_in_the_bar() {
+        let mut app = fullscreen_app();
+        press(&mut app, 'r');
+        let r = rows(&app);
+        assert_borderless(&r);
+        assert!(r[39].starts_with(" NORMAL │ Restart a?"), "{}", r[39]);
+        press(&mut app, 'n');
+        app.on_editor_error("cannot run nope".into(), Instant::now());
+        let r = rows(&app);
+        assert_borderless(&r);
+        assert!(r[39].starts_with(" NORMAL │ cannot run nope"), "{}", r[39]);
+    }
+
+    #[test]
+    fn help_overlay_renders_in_fullscreen() {
+        let mut app = fullscreen_app();
+        press(&mut app, '?');
+        let out = render(&app);
+        assert!(out.contains("Key bindings"), "{out}");
+        assert!(out.contains("fullscreen      z, alt-z"), "{out}");
+        assert!(out.contains("fullscreen      alt-z"), "{out}");
+    }
+
+    #[test]
+    fn help_shows_a_remapped_fullscreen_key() {
+        let mut o = baton_core::keymap::Overrides::new();
+        o.entry("normal".into())
+            .or_default()
+            .insert("fullscreen".into(), vec!["f".into()]);
+        let mut app = app_with_session();
+        app.set_keymap(Keymap::from_overrides(&o).expect("valid"));
+        press(&mut app, '?');
+        assert!(render(&app).contains("fullscreen      f"));
     }
 
     #[test]
