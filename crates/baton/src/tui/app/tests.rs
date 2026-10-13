@@ -1100,3 +1100,165 @@ fn next_attention_reaches_into_a_collapsed_project() {
     cursor_is(&app, Cursor::Session(sid("x//b")));
     assert_eq!(row_texts(&app)[0], "▾ x");
 }
+
+fn resizes(effects: &[Effect]) -> Vec<(u16, u16)> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Send(ClientMsg::Resize { rows, cols }) => Some((*rows, *cols)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn alt_z() -> Event {
+    alt('z')
+}
+
+#[test]
+fn z_toggles_fullscreen_in_normal_mode_and_resizes() {
+    let mut app = app();
+    assert!(!app.is_fullscreen());
+    assert!(app.wants_mouse_capture());
+    let fx = app.on_event(ch('z'), HOST);
+    assert!(app.is_fullscreen());
+    assert!(!app.wants_mouse_capture());
+    assert_eq!(resizes(&fx), [(39, 120)]);
+    assert_eq!(app.mode, Mode::Normal);
+    let fx = app.on_event(ch('z'), HOST);
+    assert!(!app.is_fullscreen());
+    assert_eq!(resizes(&fx), [(37, 86)]);
+    app.on_event(alt_z(), HOST);
+    assert!(app.is_fullscreen(), "Alt-z also works in normal mode");
+}
+
+#[test]
+fn alt_z_toggles_fullscreen_in_focus_mode_without_forwarding() {
+    let mut app = app();
+    app.on_event(key(KeyCode::Enter), HOST);
+    let fx = app.on_event(alt_z(), HOST);
+    assert!(app.is_fullscreen());
+    assert_eq!(app.mode, Mode::Focus);
+    assert_eq!(resizes(&fx), [(39, 120)]);
+    assert!(sent(&fx).is_empty());
+    let fx = app.on_event(key(KeyCode::Esc), HOST);
+    assert_eq!(sent(&fx), vec![(sid("x//a"), vec![0x1b])]);
+    assert!(app.is_fullscreen());
+    let fx = app.on_event(alt_z(), HOST);
+    assert!(!app.is_fullscreen());
+    assert_eq!(resizes(&fx), [(37, 86)]);
+}
+
+#[test]
+fn esc_leaves_fullscreen_in_normal_mode_only_when_fullscreen() {
+    let mut app = app();
+    assert!(app.on_event(key(KeyCode::Esc), HOST).is_empty());
+    assert!(!app.is_fullscreen());
+    app.on_event(ch('z'), HOST);
+    let fx = app.on_event(key(KeyCode::Esc), HOST);
+    assert!(!app.is_fullscreen());
+    assert_eq!(resizes(&fx), [(37, 86)]);
+}
+
+#[test]
+fn fullscreen_without_a_session_sets_a_hint() {
+    let mut app = App::new(HOST);
+    let fx = app.on_event(ch('z'), HOST);
+    assert!(!app.is_fullscreen());
+    assert!(resizes(&fx).is_empty());
+    assert!(app.hint.is_some());
+}
+
+#[test]
+fn restart_prompt_and_editor_error_keep_fullscreen() {
+    for answer in ['y', 'n'] {
+        let mut app = app_with(Status::Running, Status::Idle);
+        app.on_event(ch('z'), HOST);
+        let fx = app.on_event(ch('r'), HOST);
+        assert!(app.is_fullscreen());
+        assert!(resizes(&fx).is_empty());
+        assert!(app.confirm_prompt().is_some());
+        let fx = app.on_event(ch(answer), HOST);
+        assert!(app.is_fullscreen());
+        assert!(resizes(&fx).is_empty());
+    }
+    let mut app = app();
+    app.on_event(ch('z'), HOST);
+    app.on_editor_error("boom".into(), Instant::now());
+    assert!(app.is_fullscreen());
+    assert!(app.flash().is_some());
+}
+
+#[test]
+fn connection_changes_clear_fullscreen() {
+    for f in [
+        (|a: &mut App| a.on_disconnected()) as fn(&mut App),
+        |a| a.on_mismatch(9),
+        |a| {
+            a.on_connected();
+        },
+    ] {
+        let mut app = app();
+        app.on_event(ch('z'), HOST);
+        f(&mut app);
+        assert!(!app.is_fullscreen());
+        assert_eq!(app.layout, layout(HOST));
+        assert_ne!(app.layout.sidebar.width, 0);
+        assert_eq!(app.size(), (37, 86));
+    }
+}
+
+#[test]
+fn on_connected_while_fullscreen_announces_the_normal_size() {
+    let mut app = app();
+    app.on_event(ch('z'), HOST);
+    let fx = app.on_connected();
+    assert_eq!(resizes(&fx), [(37, 86)]);
+}
+
+#[test]
+fn fullscreen_mouse_origin_is_the_top_left_corner() {
+    let mut app = app();
+    app.on_daemon(
+        DaemonMsg::Output {
+            session: sid("x//a"),
+            bytes: b"\x1b[?1000h\x1b[?1006h".to_vec(),
+        },
+        Instant::now(),
+    );
+    app.on_event(key(KeyCode::Enter), HOST);
+    app.on_event(alt_z(), HOST);
+    let ev = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    });
+    let frames = sent(&app.on_event(ev, HOST));
+    assert_eq!(frames.len(), 1);
+    assert!(
+        frames[0].1.starts_with(b"\x1b[<64;1;1"),
+        "{:?}",
+        frames[0].1
+    );
+}
+
+#[test]
+fn fit_keeps_the_fullscreen_layout() {
+    let mut app = app();
+    app.on_event(ch('z'), HOST);
+    let host = Rect::new(0, 0, 100, 30);
+    let fx = app.on_event(Event::Resize(100, 30), host);
+    assert_eq!(resizes(&fx), [(29, 100)]);
+}
+
+#[test]
+fn fullscreen_ends_when_the_shown_session_disappears() {
+    let mut app = app();
+    app.on_event(ch('z'), HOST);
+    assert!(app.is_fullscreen());
+    let fx = app.on_daemon(DaemonMsg::SessionList(Vec::new()), Instant::now());
+    assert!(!app.is_fullscreen());
+    assert_eq!(app.layout, layout(HOST));
+    assert_eq!(resizes(&fx), [(37, 86)]);
+}

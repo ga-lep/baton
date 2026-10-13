@@ -55,12 +55,42 @@ pub(crate) fn exempt_current_thread() {
     EXEMPT.with(|e| e.set(true));
 }
 
+/// Whether DECSET 1007 (alternate scroll) was reset and must be set again.
+static ALT_SCROLL_RESET: AtomicBool = AtomicBool::new(false);
+
+/// Turns host mouse capture on or off. Off also resets alternate scroll
+/// (DECSET 1007) so the wheel is not turned into arrow keys; on sets it again.
+///
+/// # Errors
+/// Fails if writing to `out` fails.
+pub fn set_mouse_capture(out: &mut impl Write, on: bool) -> io::Result<()> {
+    if on {
+        execute!(out, EnableMouseCapture)?;
+        out.write_all(b"\x1b[?1007h")?;
+        ALT_SCROLL_RESET.store(false, Ordering::SeqCst);
+    } else {
+        execute!(out, DisableMouseCapture)?;
+        out.write_all(b"\x1b[?1007l")?;
+        ALT_SCROLL_RESET.store(true, Ordering::SeqCst);
+    }
+    out.flush()
+}
+
+/// Sets alternate scroll again, only if [`set_mouse_capture`] reset it.
+fn restore_alt_scroll(out: &mut impl Write) -> io::Result<()> {
+    if ALT_SCROLL_RESET.swap(false, Ordering::SeqCst) {
+        out.write_all(b"\x1b[?1007h")?;
+    }
+    Ok(())
+}
+
 /// Undo everything [`TerminalGuard::enter`] did. Safe to call repeatedly.
 fn restore() {
     let mut out = io::stdout();
     if ENHANCED.swap(false, Ordering::SeqCst) {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
+    let _ = restore_alt_scroll(&mut out);
     let _ = execute!(
         out,
         DisableMouseCapture,
@@ -121,6 +151,31 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bytes_of(f: impl FnOnce(&mut Vec<u8>) -> io::Result<()>) -> Vec<u8> {
+        let mut out = Vec::new();
+        f(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn mouse_capture_off_and_on_write_the_expected_bytes() {
+        let mut off = Vec::new();
+        execute!(off, DisableMouseCapture).unwrap();
+        off.extend_from_slice(b"\x1b[?1007l");
+        let mut on = Vec::new();
+        execute!(on, EnableMouseCapture).unwrap();
+        on.extend_from_slice(b"\x1b[?1007h");
+
+        assert_eq!(bytes_of(|o| set_mouse_capture(o, false)), off);
+        assert!(ALT_SCROLL_RESET.load(Ordering::SeqCst));
+        assert_eq!(bytes_of(restore_alt_scroll), b"\x1b[?1007h");
+        assert!(!ALT_SCROLL_RESET.load(Ordering::SeqCst));
+        assert!(bytes_of(restore_alt_scroll).is_empty());
+
+        assert_eq!(bytes_of(|o| set_mouse_capture(o, true)), on);
+        assert!(!ALT_SCROLL_RESET.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn panic_hook_is_installed_only_once() {

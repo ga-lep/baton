@@ -207,3 +207,63 @@ fn invalid_keybindings_fail_config_check_naming_the_key() -> Result<()> {
     }
     Ok(())
 }
+
+fn last_row(d: &Drive) -> String {
+    let text = d.screen_text();
+    text.lines().last().unwrap_or_default().to_string()
+}
+
+fn wait_until(d: &Drive, what: &str, f: impl Fn(&Drive) -> bool) -> Result<()> {
+    let end = Instant::now() + WAIT;
+    while !f(d) {
+        anyhow::ensure!(Instant::now() < end, "{what}\n{}", d.dump());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
+}
+
+fn is_fullscreen(d: &Drive) -> bool {
+    let text = d.screen_text();
+    !text.contains("Projects")
+        && text.lines().any(|l| l.starts_with("FAKE CLAUDE"))
+        && !d.mouse_reporting()
+}
+
+fn is_windowed(d: &Drive) -> bool {
+    d.screen_text().contains("Projects") && d.mouse_reporting()
+}
+
+#[test]
+fn fullscreen_drops_borders_and_mouse_capture_and_restores_them() -> Result<()> {
+    let env = Env::new("")?;
+    let d = env.tui()?;
+    open_both(&d)?;
+    assert!(d.mouse_reporting(), "{}", d.dump());
+
+    d.send(b"z")?;
+    wait_until(&d, "never fullscreen", is_fullscreen)?;
+    let text = d.screen_text();
+    let above: Vec<&str> = text.lines().take(text.lines().count() - 1).collect();
+    assert!(above.iter().all(|l| !l.contains('│')), "{}", d.dump());
+    let bar = last_row(&d);
+    assert!(bar.starts_with(" NORMAL │ "), "{}", d.dump());
+    assert!(bar.contains("z fullscreen"), "{}", d.dump());
+
+    d.send(b"\x1b")?;
+    wait_until(&d, "never windowed", is_windowed)?;
+
+    d.send(b"\r")?;
+    wait(&d, "FOCUS")?;
+    d.send(b"\x1bz")?;
+    wait_until(&d, "never fullscreen in focus", is_fullscreen)?;
+    let bar = last_row(&d);
+    assert!(bar.starts_with(" FOCUS │ "), "{}", d.dump());
+    assert!(bar.contains("Alt-z fullscreen"), "{}", d.dump());
+
+    d.send(b"hi\r")?;
+    wait(&d, "hi")?;
+
+    d.send(b"\x1bz")?;
+    wait_until(&d, "never windowed again", is_windowed)?;
+    Ok(())
+}

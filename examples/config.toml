@@ -50,7 +50,12 @@ default = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 }
 next_attention = "n"
 toggle_collapse = "space"
 restart = "r"
+# Fullscreen session pane. Setting it replaces the default keys (z, alt-z),
+# so list both to keep alt-z. Esc leaves it in normal mode.
+fullscreen = ["z", "alt-z"]
 
 [keybindings.focus]
 unfocus = "ctrl-\\"
 next_attention = "alt-n"
+# Taken by baton in focus mode, so it no longer reaches the session.
+fullscreen = "alt-z"
