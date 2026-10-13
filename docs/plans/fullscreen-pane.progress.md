@@ -18,3 +18,5 @@ Task 5: started
 Task 5: complete (e232159..b844b65, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/fullscreen-pane.evidence/task-5.md
   notes: first review round FAIL (example config comment wrongly claimed alt-z kept after override) — fixed in b844b65 with fullscreen = ["z", "alt-z"] and README replace-semantics sentence. Suggestion — README opening could name mouse capture as the cause
+Final evidence: EVIDENCE: PROVEN (real mouse-drag selection NOT PROVEN, manual)
+Final review: VERDICT: FAIL (1 critical) — on_connected/on_disconnected/on_mismatch clear the fullscreen flag without rebuilding layout/size or resizing the PTY (chrome drawn into fullscreen layout, wrong mouse rects, session stays full size until a host resize); warnings: duplicated l/focus computation in draw/draw_chrome, `captured` flag could go stale if mouse state is reset elsewhere, ALT_SCROLL_RESET static mutated by a unit test
