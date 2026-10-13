@@ -64,10 +64,10 @@ async fn link(result: Result<Conn, ClientError>, size: (u16, u16)) -> Result<Lin
 }
 
 /// Moves `app` and `conn` to the state `l` describes.
-fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
+async fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
     match l {
-        Link::Up(c) => {
-            app.on_connected();
+        Link::Up(mut c) => {
+            let effects = app.on_connected();
             match sidebar::load_settings() {
                 Ok(settings) => {
                     app.set_projects(settings.projects);
@@ -75,6 +75,15 @@ fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
                     app.set_editor(settings.editor);
                 }
                 Err(e) => app.on_config_error(e),
+            }
+            // Effects such as a Resize to the normal size go after the attach.
+            for effect in effects {
+                if let Effect::Send(msg) = effect
+                    && c.send(&msg).await.is_err()
+                {
+                    app.on_disconnected();
+                    return;
+                }
             }
             *conn = Some(c);
         }
@@ -110,7 +119,7 @@ async fn apply(effects: Vec<Effect>, app: &mut App, conn: &mut Option<Conn>) -> 
             }
             Effect::Reconnect => {
                 let l = link(client::ensure_daemon(Role::Tui).await, app.size()).await?;
-                settle(l, app, conn);
+                settle(l, app, conn).await;
             }
             Effect::OpenEditor { template, path } => {
                 if let Err(e) = editor::open(&template, &path) {
@@ -119,7 +128,7 @@ async fn apply(effects: Vec<Effect>, app: &mut App, conn: &mut Option<Conn>) -> 
             }
             Effect::RestartDaemon => {
                 let l = link(client::restart_daemon(Role::Tui).await, app.size()).await?;
-                settle(l, app, conn);
+                settle(l, app, conn).await;
             }
         }
     }
@@ -150,7 +159,7 @@ pub async fn run() -> Result<()> {
     app.update_available = startup.available;
     let result = match link(first, app.size()).await {
         Ok(l) => {
-            settle(l, &mut app, &mut conn);
+            settle(l, &mut app, &mut conn).await;
             drive(&mut app, &mut conn, &mut terminal, startup.pending).await
         }
         Err(e) => Err(e),

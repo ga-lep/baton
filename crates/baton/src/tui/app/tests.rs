@@ -1194,7 +1194,9 @@ fn connection_changes_clear_fullscreen() {
     for f in [
         (|a: &mut App| a.on_disconnected()) as fn(&mut App),
         |a| a.on_mismatch(9),
-        |a| a.on_connected(),
+        |a| {
+            a.on_connected();
+        },
     ] {
         let mut app = app();
         app.on_event(ch('z'), HOST);
@@ -1204,6 +1206,14 @@ fn connection_changes_clear_fullscreen() {
         assert_ne!(app.layout.sidebar.width, 0);
         assert_eq!(app.size(), (37, 86));
     }
+}
+
+#[test]
+fn on_connected_while_fullscreen_announces_the_normal_size() {
+    let mut app = app();
+    app.on_event(ch('z'), HOST);
+    let fx = app.on_connected();
+    assert_eq!(resizes(&fx), [(37, 86)]);
 }
 
 #[test]

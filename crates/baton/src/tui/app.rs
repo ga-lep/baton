@@ -311,8 +311,10 @@ impl App {
         self.mirrors.get(&self.selected_session()?.id)
     }
 
-    /// A fresh attach is about to stream everything again.
-    pub fn on_connected(&mut self) {
+    /// A fresh attach is about to stream everything again. Returns the effects
+    /// to send on the new connection after the attach: a `Resize` when leaving
+    /// fullscreen changed the panel size from the one the attach announced.
+    pub fn on_connected(&mut self) -> Vec<Effect> {
         self.sessions.clear();
         self.mirrors.clear();
         self.scroll.clear();
@@ -325,11 +327,12 @@ impl App {
         self.notice = None;
         self.confirm = None;
         self.config_error = None;
-        // Mirrors are gone, so only the layout and size need restoring; the
-        // attach already announced `size()` and the Resize effect is moot here.
-        let _ = self.leave_fullscreen();
+        // The attach may have announced the fullscreen size; the caller must
+        // send the returned Resize so the daemon learns the normal one.
+        let effects = self.leave_fullscreen();
         self.sent_view = None;
         self.pacer.mark_dirty();
+        effects
     }
 
     /// The question of the pending restart confirmation, if there is one.
