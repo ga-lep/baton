@@ -586,8 +586,6 @@ impl App {
     }
 
     /// Whether the host terminal should report mouse events to baton.
-    // Used by the event loop in a following fullscreen task.
-    #[allow(dead_code)]
     pub fn wants_mouse_capture(&self) -> bool {
         !self.fullscreen
     }

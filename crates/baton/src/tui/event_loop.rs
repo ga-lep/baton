@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use tokio::sync::oneshot::Receiver;
 
 use super::app::{App, Effect};
-use super::terminal_guard::TerminalGuard;
+use super::terminal_guard::{TerminalGuard, set_mouse_capture};
 use super::{editor, git, sidebar, ui};
 use crate::client::{self, ClientError, Conn};
 
@@ -126,6 +126,11 @@ async fn apply(effects: Vec<Effect>, app: &mut App, conn: &mut Option<Conn>) -> 
     Ok(false)
 }
 
+/// The mouse capture state to switch to, if it differs from `captured`.
+fn capture_change(wants: bool, captured: bool) -> Option<bool> {
+    (wants != captured).then_some(wants)
+}
+
 /// Runs the TUI: connect, take over the terminal, loop until quit.
 ///
 /// # Errors
@@ -171,6 +176,7 @@ async fn drive(
     mut update_rx: Option<Receiver<Option<String>>>,
 ) -> Result<()> {
     let mut events = EventStream::new();
+    let mut captured = true;
     // When the branches were last read, and for how many sessions (a new
     // session gets its branch at once rather than at the next poll).
     let mut branches_read: Option<(Instant, usize)> = None;
@@ -216,10 +222,27 @@ async fn drive(
         if apply(effects, app, conn).await? {
             return Ok(());
         }
+        if let Some(on) = capture_change(app.wants_mouse_capture(), captured) {
+            set_mouse_capture(&mut std::io::stdout(), on)?;
+            captured = on;
+        }
         let now = Instant::now();
         if app.pacer.should_render(now) {
             terminal.draw(|f| ui::draw(f, app))?;
             app.pacer.rendered(Instant::now());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capture_change;
+
+    #[test]
+    fn capture_changes_only_when_wanted_state_differs() {
+        assert_eq!(capture_change(true, true), None);
+        assert_eq!(capture_change(false, false), None);
+        assert_eq!(capture_change(false, true), Some(false));
+        assert_eq!(capture_change(true, false), Some(true));
     }
 }
