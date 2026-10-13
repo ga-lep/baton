@@ -81,6 +81,7 @@ async fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
                 if let Effect::Send(msg) = effect
                     && c.send(&msg).await.is_err()
                 {
+                    *conn = None;
                     app.on_disconnected();
                     return;
                 }
