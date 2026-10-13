@@ -20,3 +20,8 @@ Task 5: complete (e232159..b844b65, gate ok, security PASS, review PASS, evidenc
   notes: first review round FAIL (example config comment wrongly claimed alt-z kept after override) — fixed in b844b65 with fullscreen = ["z", "alt-z"] and README replace-semantics sentence. Suggestion — README opening could name mouse capture as the cause
 Final evidence: EVIDENCE: PROVEN (real mouse-drag selection NOT PROVEN, manual)
 Final review: VERDICT: FAIL (1 critical) — on_connected/on_disconnected/on_mismatch clear the fullscreen flag without rebuilding layout/size or resizing the PTY (chrome drawn into fullscreen layout, wrong mouse rects, session stays full size until a host resize); warnings: duplicated l/focus computation in draw/draw_chrome, `captured` flag could go stale if mouse state is reset elsewhere, ALT_SCROLL_RESET static mutated by a unit test
+Final-review fixes (user-requested): a90b3a5..1e82fc6, gate ok, security PASS, review PASS
+  2b39757 leave_fullscreen() restores layout/size on connect/disconnect/mismatch/Esc; fullscreen ends when the shown session disappears
+  5958f7b on_connected returns its Resize; settle sends it on the new connection after attach (RestartDaemon-while-fullscreen found unreachable, made robust anyway)
+  1e82fc6 settle clears the connection slot when a post-attach send fails
+  notes: no test for settle's send-failure path (needs a real Conn); real mouse-drag selection still a manual check
