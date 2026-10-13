@@ -156,7 +156,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
-/// Sidebar, info panel and the bordered main block with its title.
 /// The style of the pane that receives keys: yellow and bold.
 fn active_border() -> Style {
     Style::default()
@@ -164,6 +163,7 @@ fn active_border() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Sidebar, info panel and the bordered main block with its title.
 fn draw_chrome(f: &mut Frame, app: &App) {
     let l = app.layout;
     let focus = app.mode == Mode::Focus;
@@ -175,14 +175,15 @@ fn draw_chrome(f: &mut Frame, app: &App) {
 
     let items: Vec<ListItem> = app.rows().iter().map(|r| r.item()).collect();
     let mut state = ListState::default().with_selected(app.cursor_index());
-    let mut projects = Block::default().borders(Borders::ALL);
-    projects = if focus {
-        projects.title("Projects")
+    let pane = if focus {
+        Style::default()
     } else {
-        projects
-            .border_style(active_border())
-            .title(Line::styled("Projects", active_border()))
+        active_border()
     };
+    let mut projects = Block::default()
+        .borders(Borders::ALL)
+        .border_style(pane)
+        .title(Line::styled("Projects", pane));
     if let Some(v) = &app.update_available {
         // Explicit reset: the border style would otherwise tint the notice.
         projects = projects.title_bottom(
