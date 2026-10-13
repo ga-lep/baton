@@ -91,7 +91,8 @@ Target workflow: **2–4 hands-on sessions at a time**, steered closely, one per
  NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  z fullscreen  ? help  q quit
 ```
 
-In focus mode, the main panel border is highlighted and the bottom bar reads
+In normal mode, the Projects pane border and title are highlighted; in focus
+mode, the main panel border is highlighted and the bottom bar reads
 `FOCUS │ Ctrl-\ back  Alt-n next-attention  Alt-1..9 session  Alt-z fullscreen`.
 
 ### Status badges

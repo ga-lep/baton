@@ -156,6 +156,13 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
+/// The style of the pane that receives keys: yellow and bold.
+fn active_border() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
 /// Sidebar, info panel and the bordered main block with its title.
 fn draw_chrome(f: &mut Frame, app: &App) {
     let l = app.layout;
@@ -168,9 +175,20 @@ fn draw_chrome(f: &mut Frame, app: &App) {
 
     let items: Vec<ListItem> = app.rows().iter().map(|r| r.item()).collect();
     let mut state = ListState::default().with_selected(app.cursor_index());
-    let mut projects = Block::default().borders(Borders::ALL).title("Projects");
+    let pane = if focus {
+        Style::default()
+    } else {
+        active_border()
+    };
+    let mut projects = Block::default()
+        .borders(Borders::ALL)
+        .border_style(pane)
+        .title(Line::styled("Projects", pane));
     if let Some(v) = &app.update_available {
-        projects = projects.title_bottom(Line::from(format!(" v{v} available ")).right_aligned());
+        // Explicit reset: the border style would otherwise tint the notice.
+        projects = projects.title_bottom(
+            Line::styled(format!(" v{v} available "), Style::reset()).right_aligned(),
+        );
     }
     f.render_stateful_widget(
         List::new(items)
@@ -187,9 +205,7 @@ fn draw_chrome(f: &mut Frame, app: &App) {
     );
 
     let border = if focus {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
+        active_border()
     } else {
         Style::default()
     };
@@ -606,5 +622,90 @@ mod tests {
         assert!(screen.contains("TOML parse error at line 22, column 4"));
         assert!(screen.contains("22 |    { path = \"a\" }"));
         assert!(screen.contains("Any key to dismiss · q to quit"));
+    }
+
+    fn buffer(app: &App) -> ratatui::buffer::Buffer {
+        let mut t = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+        t.draw(|f| draw(f, app)).expect("draw");
+        t.backend().buffer().clone()
+    }
+
+    fn is_active(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> bool {
+        let c = &buf[(x, y)];
+        c.fg == Color::Yellow && c.modifier.contains(Modifier::BOLD)
+    }
+
+    fn session_corner_y(buf: &ratatui::buffer::Buffer) -> u16 {
+        (0..40)
+            .find(|&y| buf[(0, y)].symbol() == "┌" && buf[(1, y)].symbol() == "S")
+            .expect("session block")
+    }
+
+    #[test]
+    fn normal_mode_highlights_the_projects_pane() {
+        let app = app_with_session();
+        let buf = buffer(&app);
+        assert!(is_active(&buf, 0, 0));
+        assert!(is_active(&buf, 0, 1));
+        for x in 1..=8 {
+            assert!(is_active(&buf, x, 0), "title cell {x}");
+        }
+        let m = &buf[(app.layout.main.x, app.layout.main.y)];
+        assert_eq!(m.fg, Color::Reset);
+        assert!(!m.modifier.contains(Modifier::BOLD));
+        assert_ne!(buf[(0, session_corner_y(&buf))].fg, Color::Yellow);
+    }
+
+    #[test]
+    fn focus_mode_highlights_the_session_pane() {
+        let mut app = app_with_session();
+        app.mode = Mode::Focus;
+        let buf = buffer(&app);
+        assert!(is_active(&buf, app.layout.main.x, app.layout.main.y));
+        for x in 0..=8 {
+            assert_ne!(buf[(x, 0)].fg, Color::Yellow, "cell {x}");
+        }
+    }
+
+    #[test]
+    fn fullscreen_has_no_pane_highlight() {
+        let mut app = fullscreen_app();
+        for mode in [Mode::Normal, Mode::Focus] {
+            app.mode = mode;
+            let buf = buffer(&app);
+            for y in 0..39 {
+                for x in 0..120 {
+                    assert_ne!(buf[(x, y)].fg, Color::Yellow, "({x},{y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn help_overlay_keeps_the_projects_highlight() {
+        let mut app = app_with_session();
+        app.overlay = Overlay::Help;
+        assert!(is_active(&buffer(&app), 0, 1));
+    }
+
+    #[test]
+    fn update_notice_is_not_highlighted() {
+        let mut app = app_with_session();
+        app.update_available = Some("0.3.0".into());
+        let buf = buffer(&app);
+        let y = (0..40)
+            .find(|&y| {
+                (0..120)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains(" v0.3.0 available ")
+            })
+            .expect("notice row");
+        let row: String = (0..120).map(|x| buf[(x, y)].symbol()).collect();
+        let start = row.find(" v0.3.0").expect("notice");
+        let x0 = row[..start].chars().count() as u16;
+        for x in x0..x0 + 18 {
+            assert_ne!(buf[(x, y)].fg, Color::Yellow, "cell {x}");
+        }
     }
 }
