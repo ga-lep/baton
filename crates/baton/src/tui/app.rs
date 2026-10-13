@@ -18,7 +18,7 @@ use super::mirror::Mirror;
 use super::render_pacer::RenderPacer;
 use super::scrollback::{Loading, PAGE, Scroll, View};
 use super::sidebar::{self, Cursor, Row};
-use crate::spike::{Layout, Mode, contains, layout};
+use crate::spike::{Layout, Mode, contains, fullscreen_layout, layout};
 use crate::term::encode::{encode_focus, encode_key, encode_mouse, encode_paste};
 use crate::term::screen::Screen;
 
@@ -68,6 +68,8 @@ pub const CONFIG_ERROR_NOTICE: &str = "config file is invalid; run `baton config
 
 /// Hint shown when `n` finds no session to jump to.
 pub const NO_ATTENTION_HINT: &str = "no session needs attention";
+/// Hint shown when fullscreen is toggled with no session shown.
+pub const NO_SESSION_HINT: &str = "no session to show fullscreen";
 
 /// A scroll request from the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +116,10 @@ pub struct App {
     /// Why the config file could not be loaded, for the `ConfigError` overlay.
     config_error: Option<String>,
     size: (u16, u16),
+    /// The last host terminal area.
+    host: Rect,
+    /// Whether the shown session fills the host above the bottom bar.
+    fullscreen: bool,
     /// Whether the host terminal has focus (assumed until told otherwise).
     terminal_focused: bool,
     /// The last `ClientView` sent, to send only changes.
@@ -168,6 +174,8 @@ impl App {
             overlay: Overlay::None,
             size: inner_size(&layout),
             layout,
+            host,
+            fullscreen: false,
             pacer,
             notice: None,
             update_available: None,
@@ -317,6 +325,7 @@ impl App {
         self.notice = None;
         self.confirm = None;
         self.config_error = None;
+        self.fullscreen = false;
         self.sent_view = None;
         self.pacer.mark_dirty();
     }
@@ -343,6 +352,7 @@ impl App {
 
     /// The daemon connection is gone.
     pub fn on_disconnected(&mut self) {
+        self.fullscreen = false;
         self.mode = Mode::Normal;
         self.overlay = Overlay::Disconnected;
         self.pacer.mark_dirty();
@@ -350,6 +360,7 @@ impl App {
 
     /// The daemon speaks protocol version `daemon`.
     pub fn on_mismatch(&mut self, daemon: u32) {
+        self.fullscreen = false;
         self.mode = Mode::Normal;
         self.overlay = Overlay::VersionMismatch { daemon };
         self.pacer.mark_dirty();
@@ -549,8 +560,7 @@ impl App {
             NormalAction::PageUp => self.scroll_by(Scrolling::PageUp),
             NormalAction::PageDown => self.scroll_by(Scrolling::PageDown),
             NormalAction::Live => self.scroll_by(Scrolling::Live),
-            // Wired up by the fullscreen reducer task.
-            NormalAction::Fullscreen => Vec::new(),
+            NormalAction::Fullscreen => self.toggle_fullscreen(),
             NormalAction::Help => {
                 self.overlay = Overlay::Help;
                 Vec::new()
@@ -560,14 +570,38 @@ impl App {
     }
 
     /// Runs a focus-mode action.
-    fn run_focus(&mut self, action: FocusAction) {
+    fn run_focus(&mut self, action: FocusAction) -> Vec<Effect> {
         match action {
             FocusAction::Unfocus => self.mode = Mode::Normal,
             FocusAction::NextAttention => self.next_attention(),
-            // Wired up by the fullscreen reducer task.
-            FocusAction::Fullscreen => {}
+            FocusAction::Fullscreen => return self.toggle_fullscreen(),
             FocusAction::Session(n) => self.pick(usize::from(n)),
         }
+        Vec::new()
+    }
+
+    /// Whether the shown session fills the host above the bottom bar.
+    // Used by the renderer and event loop in the following fullscreen tasks.
+    #[allow(dead_code)]
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen
+    }
+
+    /// Whether the host terminal should report mouse events to baton.
+    // Used by the event loop in a following fullscreen task.
+    #[allow(dead_code)]
+    pub fn wants_mouse_capture(&self) -> bool {
+        !self.fullscreen
+    }
+
+    /// Flips the fullscreen view; needs a shown session.
+    fn toggle_fullscreen(&mut self) -> Vec<Effect> {
+        if self.selected_session().is_none() {
+            self.hint = Some(NO_SESSION_HINT);
+            return Vec::new();
+        }
+        self.fullscreen = !self.fullscreen;
+        self.fit(self.host)
     }
 
     /// `e`: open the shown session's repo in the editor.
@@ -885,13 +919,14 @@ impl App {
         }
         let spec = keys::from_event(key);
         match self.mode {
-            Mode::Normal => spec
-                .and_then(|s| self.keymap.normal_action(&s))
-                .map_or_else(Vec::new, |a| self.run_normal(a)),
+            Mode::Normal => match spec.and_then(|s| self.keymap.normal_action(&s)) {
+                Some(a) => self.run_normal(a),
+                None if self.fullscreen && key.code == KeyCode::Esc => self.toggle_fullscreen(),
+                None => Vec::new(),
+            },
             Mode::Focus => {
                 if let Some(action) = spec.and_then(|s| self.keymap.focus_action(&s)) {
-                    self.run_focus(action);
-                    return Vec::new();
+                    return self.run_focus(action);
                 }
                 // Typing returns to the live view, as in a terminal.
                 if let Some(id) = self.selected_session().map(|s| s.id.clone()) {
@@ -905,7 +940,12 @@ impl App {
 
     /// Re-lays out for `host`; tells the daemon if the panel size changed.
     pub fn fit(&mut self, host: Rect) -> Vec<Effect> {
-        self.layout = layout(host);
+        self.host = host;
+        self.layout = if self.fullscreen {
+            fullscreen_layout(host)
+        } else {
+            layout(host)
+        };
         self.pacer.mark_dirty();
         let size = inner_size(&self.layout);
         if size == self.size {
