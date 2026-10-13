@@ -52,10 +52,11 @@ and borders would end up in the copy. Use fullscreen instead:
 - Claude receives no mouse events while fullscreen (no wheel scroll or clicks).
   Toggle back to use them.
 - Lines that Claude soft-wrapped still copy as separate lines, one per screen
-  row. The pane uses the full terminal width, which makes this less frequent.
+  row. Wrapping follows the terminal width.
 - In focus mode `Alt-z` is taken by baton and no longer reaches the session.
 - The keys are remappable as the `fullscreen` action under `[keybindings.normal]`
-  and `[keybindings.focus]`.
+  and `[keybindings.focus]`. Setting `fullscreen` replaces that mode's default
+  keys, so list every key you want (for example `["z", "alt-z"]`).
 
 ## Updates
 
