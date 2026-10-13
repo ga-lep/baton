@@ -340,6 +340,8 @@ pub enum NormalAction {
     PageDown,
     /// Snap to the live bottom.
     Live,
+    /// Toggle the fullscreen session view.
+    Fullscreen,
     /// Show the help overlay.
     Help,
     /// Quit the TUI.
@@ -351,8 +353,8 @@ impl Action for NormalAction {
 
     fn all() -> Vec<Self> {
         use NormalAction::{
-            Activate, Editor, Help, Live, MoveDown, MoveUp, NextAttention, OpenProject, PageDown,
-            PageUp, Quit, Restart, ScrollDown, ScrollUp, Select, ToggleCollapse,
+            Activate, Editor, Fullscreen, Help, Live, MoveDown, MoveUp, NextAttention, OpenProject,
+            PageDown, PageUp, Quit, Restart, ScrollDown, ScrollUp, Select, ToggleCollapse,
         };
         let mut v = vec![MoveDown, MoveUp, Activate, OpenProject, ToggleCollapse];
         v.extend((1..=9).map(Select));
@@ -365,6 +367,7 @@ impl Action for NormalAction {
             PageUp,
             PageDown,
             Live,
+            Fullscreen,
             Help,
             Quit,
         ]);
@@ -387,6 +390,7 @@ impl Action for NormalAction {
             Self::PageUp => "page_up".to_owned(),
             Self::PageDown => "page_down".to_owned(),
             Self::Live => "live".to_owned(),
+            Self::Fullscreen => "fullscreen".to_owned(),
             Self::Help => "help".to_owned(),
             Self::Quit => "quit".to_owned(),
         }
@@ -411,6 +415,7 @@ impl Action for NormalAction {
             Self::PageUp => vec!["pgup"],
             Self::PageDown => vec!["pgdn"],
             Self::Live => vec!["G"],
+            Self::Fullscreen => vec!["z", "alt-z"],
             Self::Help => vec!["?"],
             Self::Quit => vec!["q"],
         }
@@ -424,6 +429,8 @@ pub enum FocusAction {
     Unfocus,
     /// Jump to the next session needing attention.
     NextAttention,
+    /// Toggle the fullscreen session view.
+    Fullscreen,
     /// Switch to session `n` (1..=9) of the current project.
     Session(u8),
 }
@@ -432,7 +439,7 @@ impl Action for FocusAction {
     const MODE: &'static str = "focus";
 
     fn all() -> Vec<Self> {
-        let mut v = vec![Self::Unfocus, Self::NextAttention];
+        let mut v = vec![Self::Unfocus, Self::NextAttention, Self::Fullscreen];
         v.extend((1..=9).map(Self::Session));
         v
     }
@@ -441,6 +448,7 @@ impl Action for FocusAction {
         match self {
             Self::Unfocus => "unfocus".to_owned(),
             Self::NextAttention => "next_attention".to_owned(),
+            Self::Fullscreen => "fullscreen".to_owned(),
             Self::Session(n) => format!("session_{n}"),
         }
     }
@@ -452,6 +460,7 @@ impl Action for FocusAction {
         match self {
             Self::Unfocus => vec!["ctrl-\\"],
             Self::NextAttention => vec!["alt-n"],
+            Self::Fullscreen => vec!["alt-z"],
             Self::Session(n) => ALT_DIGITS
                 .get(usize::from(n).wrapping_sub(1))
                 .map_or_else(Vec::new, |d| vec![*d]),
@@ -961,5 +970,40 @@ mod tests {
             focus.contains(&("session_1".to_owned(), "alt-1".to_owned())),
             "{focus:?}"
         );
+    }
+
+    #[test]
+    fn fullscreen_action_defaults_overrides_and_describe() {
+        let k = Keymap::default();
+        assert_eq!(k.normal_action(&spec("z")), Some(NormalAction::Fullscreen));
+        assert_eq!(
+            k.normal_action(&spec("alt-z")),
+            Some(NormalAction::Fullscreen)
+        );
+        assert_eq!(
+            k.focus_action(&spec("alt-z")),
+            Some(FocusAction::Fullscreen)
+        );
+        assert!(
+            k.describe_normal()
+                .contains(&("fullscreen".to_owned(), "z, alt-z".to_owned()))
+        );
+        assert!(
+            k.describe_focus()
+                .contains(&("fullscreen".to_owned(), "alt-z".to_owned()))
+        );
+
+        let k = Keymap::from_overrides(&overrides(&[
+            ("normal", "fullscreen", &["f"]),
+            ("focus", "fullscreen", &["f12"]),
+        ]))
+        .expect("valid");
+        assert_eq!(k.normal_action(&spec("f")), Some(NormalAction::Fullscreen));
+        assert_eq!(k.normal_action(&spec("z")), None);
+        assert_eq!(k.focus_action(&spec("f12")), Some(FocusAction::Fullscreen));
+        assert_eq!(k.focus_action(&spec("alt-z")), None);
+
+        let e = err(&[("focus", "fullscreen", &["alt-n"])]);
+        assert!(e.contains("keybindings.focus"), "{e}");
     }
 }

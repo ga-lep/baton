@@ -549,6 +549,8 @@ impl App {
             NormalAction::PageUp => self.scroll_by(Scrolling::PageUp),
             NormalAction::PageDown => self.scroll_by(Scrolling::PageDown),
             NormalAction::Live => self.scroll_by(Scrolling::Live),
+            // Wired up by the fullscreen reducer task.
+            NormalAction::Fullscreen => Vec::new(),
             NormalAction::Help => {
                 self.overlay = Overlay::Help;
                 Vec::new()
@@ -562,6 +564,8 @@ impl App {
         match action {
             FocusAction::Unfocus => self.mode = Mode::Normal,
             FocusAction::NextAttention => self.next_attention(),
+            // Wired up by the fullscreen reducer task.
+            FocusAction::Fullscreen => {}
             FocusAction::Session(n) => self.pick(usize::from(n)),
         }
     }
