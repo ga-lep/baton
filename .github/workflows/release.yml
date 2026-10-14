@@ -166,11 +166,19 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
             --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: rustup toolchain install
+
       - name: Publish crate to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
           echo "Publishing crates/baton (baton-tui) to crates.io"
-          # Ensure the crate is the workspace member and has publish = ["crates-io"] in its Cargo.toml
           cargo publish --manifest-path crates/baton/Cargo.toml --token "$CARGO_REGISTRY_TOKEN"
