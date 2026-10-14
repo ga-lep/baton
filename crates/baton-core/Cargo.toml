@@ -3,13 +3,13 @@ name = "baton-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+publish = ["crates-io"]
 
 [lints]
 workspace = true
 
 [dependencies]
-baton-proto.workspace = true
+baton-proto = { version = "0.2.9", path = "../baton-proto" }
 nix = { workspace = true, features = ["user"] }
 serde = { workspace = true, features = ["derive"] }
 semver.workspace = true
