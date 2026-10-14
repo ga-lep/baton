@@ -263,7 +263,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "baton-core"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "baton-proto",
  "nix 0.30.1",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "baton-proto"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "bytes",
  "futures-util",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "baton-testkit"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "baton-core",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "baton-tui"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "baton-core",
