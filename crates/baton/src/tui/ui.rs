@@ -38,6 +38,7 @@ pub fn normal_bar(keymap: &Keymap) -> String {
         (NormalAction::Restart, "restart"),
         (NormalAction::Editor, "editor"),
         (NormalAction::OpenProject, "open project"),
+        (NormalAction::Fullscreen, "fullscreen"),
         (NormalAction::Help, "help"),
         (NormalAction::Quit, "quit"),
     ];
@@ -76,6 +77,9 @@ pub fn focus_bar(keymap: &Keymap) -> String {
             _ => first,
         };
         items.push(format!("{range} session"));
+    }
+    if let Some(k) = keymap.focus_keys(FocusAction::Fullscreen).first() {
+        items.push(format!("{} fullscreen", label(k)));
     }
     format!(" FOCUS │ {}", items.join("  "))
 }
@@ -116,65 +120,9 @@ pub fn mismatch_text(daemon: u32) -> String {
 pub fn draw(f: &mut Frame, app: &App) {
     let l = app.layout;
     let focus = app.mode == Mode::Focus;
-    let [list_area, info_area] = Split::vertical([
-        Constraint::Min(3),
-        Constraint::Length(INFO_HEIGHT.min(l.sidebar.height.saturating_sub(3))),
-    ])
-    .areas(l.sidebar);
-
-    let items: Vec<ListItem> = app.rows().iter().map(|r| r.item()).collect();
-    let mut state = ListState::default().with_selected(app.cursor_index());
-    let mut projects = Block::default().borders(Borders::ALL).title("Projects");
-    if let Some(v) = &app.update_available {
-        projects = projects.title_bottom(Line::from(format!(" v{v} available ")).right_aligned());
+    if !app.is_fullscreen() {
+        draw_chrome(f, app);
     }
-    f.render_stateful_widget(
-        List::new(items)
-            .block(projects)
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
-        list_area,
-        &mut state,
-    );
-    f.render_widget(
-        Paragraph::new(info_text(app, info_area.width.saturating_sub(2)))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title("Session")),
-        info_area,
-    );
-
-    let border = if focus {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-    let mut title = app.selected_session().map_or_else(
-        || "Baton".to_owned(),
-        |s| {
-            let branch = app
-                .branch(s)
-                .map(|b| format!(" · ⎇ {b}"))
-                .unwrap_or_default();
-            format!(
-                "{}{branch} · {} · {} {}",
-                repo_name(s),
-                s.profile.as_deref().unwrap_or("default"),
-                badge(s.status),
-                status_label(s.status)
-            )
-        },
-    );
-    if app.scroll_offset() > 0 {
-        title.push_str(&format!(" [scrollback -{}]", app.scroll_offset()));
-    }
-    f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border)
-            .title(title),
-        l.main,
-    );
     match (app.scroll_view(), app.selected_mirror()) {
         (Some(v), _) => v.render(l.inner, f.buffer_mut()),
         (None, Some(m)) => m.screen().render(l.inner, f.buffer_mut(), focus),
@@ -206,6 +154,87 @@ pub fn draw(f: &mut Frame, app: &App) {
         Overlay::Help => super::help::draw(f, app.keymap()),
         Overlay::ConfigError => config_error(f, app.config_error().unwrap_or_default()),
     }
+}
+
+/// The style of the pane that receives keys: yellow and bold.
+fn active_border() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Sidebar, info panel and the bordered main block with its title.
+fn draw_chrome(f: &mut Frame, app: &App) {
+    let l = app.layout;
+    let focus = app.mode == Mode::Focus;
+    let [list_area, info_area] = Split::vertical([
+        Constraint::Min(3),
+        Constraint::Length(INFO_HEIGHT.min(l.sidebar.height.saturating_sub(3))),
+    ])
+    .areas(l.sidebar);
+
+    let items: Vec<ListItem> = app.rows().iter().map(|r| r.item()).collect();
+    let mut state = ListState::default().with_selected(app.cursor_index());
+    let pane = if focus {
+        Style::default()
+    } else {
+        active_border()
+    };
+    let mut projects = Block::default()
+        .borders(Borders::ALL)
+        .border_style(pane)
+        .title(Line::styled("Projects", pane));
+    if let Some(v) = &app.update_available {
+        // Explicit reset: the border style would otherwise tint the notice.
+        projects = projects.title_bottom(
+            Line::styled(format!(" v{v} available "), Style::reset()).right_aligned(),
+        );
+    }
+    f.render_stateful_widget(
+        List::new(items)
+            .block(projects)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
+        list_area,
+        &mut state,
+    );
+    f.render_widget(
+        Paragraph::new(info_text(app, info_area.width.saturating_sub(2)))
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title("Session")),
+        info_area,
+    );
+
+    let border = if focus {
+        active_border()
+    } else {
+        Style::default()
+    };
+    let mut title = app.selected_session().map_or_else(
+        || "Baton".to_owned(),
+        |s| {
+            let branch = app
+                .branch(s)
+                .map(|b| format!(" · ⎇ {b}"))
+                .unwrap_or_default();
+            format!(
+                "{}{branch} · {} · {} {}",
+                repo_name(s),
+                s.profile.as_deref().unwrap_or("default"),
+                badge(s.status),
+                status_label(s.status)
+            )
+        },
+    );
+    if app.scroll_offset() > 0 {
+        title.push_str(&format!(" [scrollback -{}]", app.scroll_offset()));
+    }
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border)
+            .title(title),
+        l.main,
+    );
 }
 
 /// The popup for a config file that failed to load; `message` keeps its line
@@ -439,11 +468,11 @@ mod tests {
         let k = Keymap::default();
         assert_eq!(
             normal_bar(&k),
-            " NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  ? help  q quit"
+            " NORMAL │ ⏎ focus  n next-attention  r restart  e editor  o open project  z fullscreen  ? help  q quit"
         );
         assert_eq!(
             focus_bar(&k),
-            " FOCUS │ Ctrl-\\ back  Alt-n next-attention  Alt-1..9 session"
+            " FOCUS │ Ctrl-\\ back  Alt-n next-attention  Alt-1..9 session  Alt-z fullscreen"
         );
     }
 
@@ -455,6 +484,79 @@ mod tests {
             )),
             Rect::new(0, 0, 120, 40),
         );
+    }
+
+    fn rows(app: &App) -> Vec<String> {
+        render(app).lines().map(str::to_owned).collect()
+    }
+
+    fn fullscreen_app() -> App {
+        let mut app = app_with_session();
+        press(&mut app, 'z');
+        assert!(app.is_fullscreen());
+        app
+    }
+
+    fn assert_borderless(rows: &[String]) {
+        for row in &rows[..39] {
+            assert!(
+                !row.contains("Projects") && !row.contains("Session"),
+                "{row}"
+            );
+            assert!(!row.contains(['┌', '┐', '└', '┘', '│', '─']), "{row}");
+        }
+    }
+
+    #[test]
+    fn fullscreen_draws_only_the_mirror_and_the_bar() {
+        let mut app = fullscreen_app();
+        let r = rows(&app);
+        assert_eq!(r.len(), 40);
+        assert_borderless(&r);
+        assert!(r[0].starts_with("mirrored text"), "{}", r[0]);
+        assert!(r[39].starts_with(" NORMAL │ "), "{}", r[39]);
+        assert!(r[39].contains("z fullscreen"), "{}", r[39]);
+        app.mode = Mode::Focus;
+        let r = rows(&app);
+        assert_borderless(&r);
+        assert!(r[39].starts_with(" FOCUS │ "), "{}", r[39]);
+        assert!(r[39].contains("Alt-z fullscreen"), "{}", r[39]);
+    }
+
+    #[test]
+    fn fullscreen_keeps_confirm_prompt_and_flash_in_the_bar() {
+        let mut app = fullscreen_app();
+        press(&mut app, 'r');
+        let r = rows(&app);
+        assert_borderless(&r);
+        assert!(r[39].starts_with(" NORMAL │ Restart a?"), "{}", r[39]);
+        press(&mut app, 'n');
+        app.on_editor_error("cannot run nope".into(), Instant::now());
+        let r = rows(&app);
+        assert_borderless(&r);
+        assert!(r[39].starts_with(" NORMAL │ cannot run nope"), "{}", r[39]);
+    }
+
+    #[test]
+    fn help_overlay_renders_in_fullscreen() {
+        let mut app = fullscreen_app();
+        press(&mut app, '?');
+        let out = render(&app);
+        assert!(out.contains("Key bindings"), "{out}");
+        assert!(out.contains("fullscreen      z, alt-z"), "{out}");
+        assert!(out.contains("fullscreen      alt-z"), "{out}");
+    }
+
+    #[test]
+    fn help_shows_a_remapped_fullscreen_key() {
+        let mut o = baton_core::keymap::Overrides::new();
+        o.entry("normal".into())
+            .or_default()
+            .insert("fullscreen".into(), vec!["f".into()]);
+        let mut app = app_with_session();
+        app.set_keymap(Keymap::from_overrides(&o).expect("valid"));
+        press(&mut app, '?');
+        assert!(render(&app).contains("fullscreen      f"));
     }
 
     #[test]
@@ -520,5 +622,90 @@ mod tests {
         assert!(screen.contains("TOML parse error at line 22, column 4"));
         assert!(screen.contains("22 |    { path = \"a\" }"));
         assert!(screen.contains("Any key to dismiss · q to quit"));
+    }
+
+    fn buffer(app: &App) -> ratatui::buffer::Buffer {
+        let mut t = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+        t.draw(|f| draw(f, app)).expect("draw");
+        t.backend().buffer().clone()
+    }
+
+    fn is_active(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> bool {
+        let c = &buf[(x, y)];
+        c.fg == Color::Yellow && c.modifier.contains(Modifier::BOLD)
+    }
+
+    fn session_corner_y(buf: &ratatui::buffer::Buffer) -> u16 {
+        (0..40)
+            .find(|&y| buf[(0, y)].symbol() == "┌" && buf[(1, y)].symbol() == "S")
+            .expect("session block")
+    }
+
+    #[test]
+    fn normal_mode_highlights_the_projects_pane() {
+        let app = app_with_session();
+        let buf = buffer(&app);
+        assert!(is_active(&buf, 0, 0));
+        assert!(is_active(&buf, 0, 1));
+        for x in 1..=8 {
+            assert!(is_active(&buf, x, 0), "title cell {x}");
+        }
+        let m = &buf[(app.layout.main.x, app.layout.main.y)];
+        assert_eq!(m.fg, Color::Reset);
+        assert!(!m.modifier.contains(Modifier::BOLD));
+        assert_ne!(buf[(0, session_corner_y(&buf))].fg, Color::Yellow);
+    }
+
+    #[test]
+    fn focus_mode_highlights_the_session_pane() {
+        let mut app = app_with_session();
+        app.mode = Mode::Focus;
+        let buf = buffer(&app);
+        assert!(is_active(&buf, app.layout.main.x, app.layout.main.y));
+        for x in 0..=8 {
+            assert_ne!(buf[(x, 0)].fg, Color::Yellow, "cell {x}");
+        }
+    }
+
+    #[test]
+    fn fullscreen_has_no_pane_highlight() {
+        let mut app = fullscreen_app();
+        for mode in [Mode::Normal, Mode::Focus] {
+            app.mode = mode;
+            let buf = buffer(&app);
+            for y in 0..39 {
+                for x in 0..120 {
+                    assert_ne!(buf[(x, y)].fg, Color::Yellow, "({x},{y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn help_overlay_keeps_the_projects_highlight() {
+        let mut app = app_with_session();
+        app.overlay = Overlay::Help;
+        assert!(is_active(&buffer(&app), 0, 1));
+    }
+
+    #[test]
+    fn update_notice_is_not_highlighted() {
+        let mut app = app_with_session();
+        app.update_available = Some("0.3.0".into());
+        let buf = buffer(&app);
+        let y = (0..40)
+            .find(|&y| {
+                (0..120)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains(" v0.3.0 available ")
+            })
+            .expect("notice row");
+        let row: String = (0..120).map(|x| buf[(x, y)].symbol()).collect();
+        let start = row.find(" v0.3.0").expect("notice");
+        let x0 = row[..start].chars().count() as u16;
+        for x in x0..x0 + 18 {
+            assert_ne!(buf[(x, y)].fg, Color::Yellow, "cell {x}");
+        }
     }
 }

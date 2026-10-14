@@ -115,6 +115,19 @@ pub fn layout(area: Rect) -> Layout {
     }
 }
 
+/// Layout of the fullscreen view: no sidebar or border, the main area is
+/// everything above the one-row bottom bar.
+pub fn fullscreen_layout(area: Rect) -> Layout {
+    let bar_h = 1.min(area.height);
+    let body = Rect::new(area.x, area.y, area.width, area.height - bar_h);
+    Layout {
+        sidebar: Rect::new(area.x, area.y, 0, 0),
+        main: body,
+        inner: body,
+        bar: Rect::new(area.x, area.y + body.height, area.width, bar_h),
+    }
+}
+
 pub(crate) fn contains(r: Rect, x: u16, y: u16) -> bool {
     x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
@@ -374,6 +387,19 @@ mod tests {
 
     fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn fullscreen_layout_covers_all_but_the_bar() {
+        let l = fullscreen_layout(Rect::new(0, 0, 120, 40));
+        assert_eq!(l.inner, Rect::new(0, 0, 120, 39));
+        assert_eq!(l.main, l.inner);
+        assert_eq!(l.bar, Rect::new(0, 39, 120, 1));
+        assert_eq!((l.sidebar.width, l.sidebar.height), (0, 0));
+        assert_eq!(l.bar, layout(Rect::new(0, 0, 120, 40)).bar);
+        for (w, h) in [(0, 0), (1, 1), (5, 0)] {
+            let _ = fullscreen_layout(Rect::new(0, 0, w, h));
+        }
     }
 
     #[test]

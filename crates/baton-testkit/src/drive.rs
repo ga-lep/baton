@@ -161,6 +161,12 @@ impl Drive {
         self.size
     }
 
+    /// Whether the program has asked the terminal to report mouse events.
+    pub fn mouse_reporting(&self) -> bool {
+        let st = lock(&self.state);
+        st.parser.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None
+    }
+
     /// Screen rows with trailing whitespace trimmed and trailing blank rows
     /// dropped, joined by `\n`.
     pub fn screen_text(&self) -> String {

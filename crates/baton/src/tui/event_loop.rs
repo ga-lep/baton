@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use tokio::sync::oneshot::Receiver;
 
 use super::app::{App, Effect};
-use super::terminal_guard::TerminalGuard;
+use super::terminal_guard::{TerminalGuard, set_mouse_capture};
 use super::{editor, git, sidebar, ui};
 use crate::client::{self, ClientError, Conn};
 
@@ -64,10 +64,10 @@ async fn link(result: Result<Conn, ClientError>, size: (u16, u16)) -> Result<Lin
 }
 
 /// Moves `app` and `conn` to the state `l` describes.
-fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
+async fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
     match l {
-        Link::Up(c) => {
-            app.on_connected();
+        Link::Up(mut c) => {
+            let effects = app.on_connected();
             match sidebar::load_settings() {
                 Ok(settings) => {
                     app.set_projects(settings.projects);
@@ -75,6 +75,16 @@ fn settle(l: Link, app: &mut App, conn: &mut Option<Conn>) {
                     app.set_editor(settings.editor);
                 }
                 Err(e) => app.on_config_error(e),
+            }
+            // Effects such as a Resize to the normal size go after the attach.
+            for effect in effects {
+                if let Effect::Send(msg) = effect
+                    && c.send(&msg).await.is_err()
+                {
+                    *conn = None;
+                    app.on_disconnected();
+                    return;
+                }
             }
             *conn = Some(c);
         }
@@ -110,7 +120,7 @@ async fn apply(effects: Vec<Effect>, app: &mut App, conn: &mut Option<Conn>) -> 
             }
             Effect::Reconnect => {
                 let l = link(client::ensure_daemon(Role::Tui).await, app.size()).await?;
-                settle(l, app, conn);
+                settle(l, app, conn).await;
             }
             Effect::OpenEditor { template, path } => {
                 if let Err(e) = editor::open(&template, &path) {
@@ -119,11 +129,16 @@ async fn apply(effects: Vec<Effect>, app: &mut App, conn: &mut Option<Conn>) -> 
             }
             Effect::RestartDaemon => {
                 let l = link(client::restart_daemon(Role::Tui).await, app.size()).await?;
-                settle(l, app, conn);
+                settle(l, app, conn).await;
             }
         }
     }
     Ok(false)
+}
+
+/// The mouse capture state to switch to, if it differs from `captured`.
+fn capture_change(wants: bool, captured: bool) -> Option<bool> {
+    (wants != captured).then_some(wants)
 }
 
 /// Runs the TUI: connect, take over the terminal, loop until quit.
@@ -145,7 +160,7 @@ pub async fn run() -> Result<()> {
     app.update_available = startup.available;
     let result = match link(first, app.size()).await {
         Ok(l) => {
-            settle(l, &mut app, &mut conn);
+            settle(l, &mut app, &mut conn).await;
             drive(&mut app, &mut conn, &mut terminal, startup.pending).await
         }
         Err(e) => Err(e),
@@ -171,6 +186,7 @@ async fn drive(
     mut update_rx: Option<Receiver<Option<String>>>,
 ) -> Result<()> {
     let mut events = EventStream::new();
+    let mut captured = true;
     // When the branches were last read, and for how many sessions (a new
     // session gets its branch at once rather than at the next poll).
     let mut branches_read: Option<(Instant, usize)> = None;
@@ -216,10 +232,27 @@ async fn drive(
         if apply(effects, app, conn).await? {
             return Ok(());
         }
+        if let Some(on) = capture_change(app.wants_mouse_capture(), captured) {
+            set_mouse_capture(&mut std::io::stdout(), on)?;
+            captured = on;
+        }
         let now = Instant::now();
         if app.pacer.should_render(now) {
             terminal.draw(|f| ui::draw(f, app))?;
             app.pacer.rendered(Instant::now());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capture_change;
+
+    #[test]
+    fn capture_changes_only_when_wanted_state_differs() {
+        assert_eq!(capture_change(true, true), None);
+        assert_eq!(capture_change(false, false), None);
+        assert_eq!(capture_change(false, true), Some(false));
+        assert_eq!(capture_change(true, false), Some(true));
     }
 }
