@@ -1,9 +1,9 @@
 [package]
-name = "baton"
+name = "baton-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+publish = ["crates-io"]
 
 [lints]
 workspace = true
