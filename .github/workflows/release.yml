@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"]=="baton"))')
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"]=="baton-tui"))')
           echo "Workspace version: $version"
           if [[ "$EVENT" == push && "$REF" == refs/tags/v* ]]; then
             if [[ "${REF_NAME#v}" != "$version" ]]; then
@@ -84,7 +84,7 @@ jobs:
       - name: Build
         env:
           TARGET: ${{ matrix.target }}
-        run: cargo build --release --locked -p baton --target "$TARGET"
+        run: cargo build --release --locked -p baton-tui --target "$TARGET"
       - name: Smoke test
         env:
           TARGET: ${{ matrix.target }}
@@ -136,6 +136,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      packages: write
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -165,3 +166,11 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
             --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}"
+      - name: Publish crate to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Publishing crates/baton (baton-tui) to crates.io"
+          # Ensure the crate is the workspace member and has publish = ["crates-io"] in its Cargo.toml
+          cargo publish --manifest-path crates/baton/Cargo.toml --token "$CARGO_REGISTRY_TOKEN"

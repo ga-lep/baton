@@ -37,6 +37,18 @@ curl -fsSL https://raw.githubusercontent.com/ga-lep/baton/main/examples/config.t
 Then edit the `[[projects]]` entries to point at your repos. See
 [examples/config.toml](examples/config.toml) for every option.
 
+Minimal example
+
+```toml
+# ~/.config/baton/config.toml
+update_check = true
+
+[[projects]]
+name = "my-repo"
+path = "/home/user/projects/my-repo"
+hook = "baton hook"
+```
+
 ## Copying text from a session
 
 Baton captures the mouse, so a plain drag does not select text, and the sidebar
