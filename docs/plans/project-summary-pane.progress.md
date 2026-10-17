@@ -10,3 +10,5 @@ Task 3: started
 Task 3: complete (91e9d82..db66caa, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/project-summary-pane.evidence/task-3.md
   notes: Task 2 weak-branch-test warning fixed here; e2e uses fixed sleep polling (possible CI flake); loose "  p" and "Session" waits
+Final evidence: EVIDENCE: PROVEN
+Final review: VERDICT: PASS (warnings: activity() redundant needs_attention check; lines() `allowed` small-height logic could be clearer; suggestions: stricter collapsed-summary test, e2e fixed-sleep polling)
