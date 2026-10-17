@@ -71,6 +71,9 @@ pub const NO_ATTENTION_HINT: &str = "no session needs attention";
 /// Hint shown when fullscreen is toggled with no session shown.
 pub const NO_SESSION_HINT: &str = "no session to show fullscreen";
 
+/// Hint shown when a session key is pressed on a project row.
+pub const SELECT_SESSION_HINT: &str = "select a session first";
+
 /// A scroll request from the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scrolling {
@@ -280,13 +283,34 @@ impl App {
         self.cursor.as_ref()
     }
 
-    /// The project to summarize: the cursor's project, only when the cursor is
-    /// on a project row.
+    /// The project whose summary fills the main pane: the cursor's project,
+    /// only on a project row in normal mode and not fullscreen.
     pub fn summary_project(&self) -> Option<&str> {
+        if self.mode != Mode::Normal || self.fullscreen {
+            return None;
+        }
         match self.cursor.as_ref()? {
             Cursor::Project(name) => Some(name),
             Cursor::Session(_) => None,
         }
+    }
+
+    /// The session on screen: none while a project summary is drawn.
+    fn on_screen_session(&self) -> Option<&SessionInfo> {
+        if self.summary_project().is_some() {
+            return None;
+        }
+        self.selected_session()
+    }
+
+    /// Whether a session key must be refused because the main pane shows a
+    /// project summary; sets the hint when so.
+    fn refuse_on_project_row(&mut self) -> bool {
+        let refuse = self.summary_project().is_some();
+        if refuse {
+            self.hint = Some(SELECT_SESSION_HINT);
+        }
+        refuse
     }
 
     /// The sessions of project `name`, in sidebar order.
@@ -406,7 +430,7 @@ impl App {
             return; // no usable daemon connection
         }
         let view = (
-            self.selected_session().map(|s| s.id.clone()),
+            self.on_screen_session().map(|s| s.id.clone()),
             self.terminal_focused,
         );
         if self.sent_view.as_ref() == Some(&view) {
@@ -573,6 +597,18 @@ impl App {
             }
             NormalAction::NextAttention => {
                 self.next_attention();
+                Vec::new()
+            }
+            NormalAction::Restart
+            | NormalAction::Editor
+            | NormalAction::ScrollUp
+            | NormalAction::ScrollDown
+            | NormalAction::PageUp
+            | NormalAction::PageDown
+            | NormalAction::Live
+            | NormalAction::Fullscreen
+                if self.refuse_on_project_row() =>
+            {
                 Vec::new()
             }
             NormalAction::Restart => self.ask_restart(),
