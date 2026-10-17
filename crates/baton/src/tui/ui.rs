@@ -436,7 +436,9 @@ mod tests {
         app.refresh_branches(|_| Some("main".into()));
         press(&mut app, 'k');
         let out = render(&app);
-        assert!(out.contains("⎇ main · "), "{out}");
+        // Sidebar-specific: the main panel title also contains `⎇ main · `.
+        assert!(out.contains("│1 ● a  running"), "{out}");
+        assert!(out.contains("│  ⎇ main · default"), "{out}");
     }
 
     #[test]

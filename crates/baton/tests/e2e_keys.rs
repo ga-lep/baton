@@ -267,3 +267,49 @@ fn fullscreen_drops_borders_and_mouse_capture_and_restores_them() -> Result<()> 
     wait_until(&d, "never windowed again", is_windowed)?;
     Ok(())
 }
+
+#[test]
+fn project_row_shows_a_summary_of_its_sessions() -> Result<()> {
+    let env = Env::new("")?;
+    let mut d = env.tui()?;
+    wait(&d, "▸ x  \\(closed\\)")?;
+
+    // The cursor is on the closed project.
+    wait(&d, "Project x")?;
+    wait(&d, "no sessions")?;
+
+    d.send(b"o")?;
+    wait(&d, "1 ○ alpha  idle")?;
+    wait(&d, "2 ○ beta  idle")?;
+
+    // Move up to the project row (at most 3 presses).
+    for _ in 0..3 {
+        if d.screen_text().contains("▾ x") && d.screen_text().contains("2 idle") {
+            break;
+        }
+        d.send(b"k")?;
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    wait(&d, "Project x")?;
+    wait(&d, "2 idle")?;
+    // The entry sits inside the lower block, which has the `Project x` title above it.
+    let text = d.screen_text();
+    let lines: Vec<&str> = text.lines().collect();
+    let title = lines
+        .iter()
+        .position(|l| l.contains("Project x"))
+        .expect("title");
+    let below = lines[title..].join("\n");
+    assert!(below.contains("1 ○ alpha  idle"), "{}", d.dump());
+    assert!(below.contains("  p"), "{}", d.dump());
+    assert!(!below.contains('⎇'), "{}", d.dump());
+
+    // Back on a session row the block is the Session panel again.
+    d.send(b"j")?;
+    wait(&d, "Session")?;
+    wait(&d, "profile  p")?;
+
+    d.send(b"q")?;
+    assert_eq!(d.wait_exit(WAIT)?, 0);
+    Ok(())
+}
