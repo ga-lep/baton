@@ -7,3 +7,6 @@ Task 2: complete (7271c48..fdde08b, gate ok, security PASS, review PASS, evidenc
   evidence: docs/plans/project-summary-main-pane.evidence/task-2.md
   notes: sidebar asserts use contains("Session") (could pin ┌Session); draw_chrome calls summary_project() twice for title
 Task 3: started
+Task 3: complete (3081f22..821a085, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/project-summary-main-pane.evidence/task-3.md
+  notes: main[at + 1] indexing could panic on last row (use .get)
