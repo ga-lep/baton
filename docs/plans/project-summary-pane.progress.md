@@ -6,3 +6,4 @@ Task 2: started
 Task 2: complete (b9667bc..a1e2f3f, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/project-summary-pane.evidence/task-2.md
   notes: WARNING (non-blocking): ui test project_summary_shows_the_branch is weak (main panel title also has "⎇ main · "), make sidebar-specific; loose !contains("Session") check; clip counts chars not width; draw_chrome entry-building could be a helper
+Task 3: started
