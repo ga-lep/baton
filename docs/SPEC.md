@@ -58,6 +58,10 @@ Target workflow: **2–4 hands-on sessions at a time**, steered closely, one per
 - Context window usage % and token totals (in / out / cache)
 - Estimated cost (from token counts × configured price table; labeled "est.")
 
+**Project summary** (cursor on a project row)
+- Tally of the project's sessions: work / wait / idle / off.
+- Per session: number, badge, repo, status, git branch and profile.
+
 **Other**
 - `e` opens the session's repo in the configured editor/IDE (detached GUI process).
 - Config: projects, repos, profiles, per-repo extra `claude` args, editor command, notifications toggle, **remappable keybindings**.
@@ -94,6 +98,9 @@ Target workflow: **2–4 hands-on sessions at a time**, steered closely, one per
 In normal mode, the Projects pane border and title are highlighted; in focus
 mode, the main panel border is highlighted and the bottom bar reads
 `FOCUS │ Ctrl-\ back  Alt-n next-attention  Alt-1..9 session  Alt-z fullscreen`.
+
+When the cursor is on a project row, the lower sidebar block shows
+`Project <name>` with the project summary (see §3) instead of `Session`.
 
 ### Status badges
 

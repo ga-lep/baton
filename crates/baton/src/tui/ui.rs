@@ -11,6 +11,7 @@ use baton_core::keymap::{FocusAction, KeySpec, Keymap, NormalAction};
 use super::app::{App, Overlay};
 use super::info_panel;
 use super::labels::{badge, status_label};
+use super::project_summary;
 use super::sidebar::repo_name;
 use crate::spike::Mode;
 use crate::term::screen::Screen;
@@ -197,12 +198,39 @@ fn draw_chrome(f: &mut Frame, app: &App) {
         list_area,
         &mut state,
     );
-    f.render_widget(
-        Paragraph::new(info_text(app, info_area.width.saturating_sub(2)))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title("Session")),
-        info_area,
-    );
+    let inner_w = info_area.width.saturating_sub(2);
+    if let Some(project) = app.summary_project() {
+        let sessions = app.project_sessions(project);
+        let entries: Vec<project_summary::Entry> = sessions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| project_summary::Entry {
+                n: i + 1,
+                info: s,
+                branch: app.branch(s),
+            })
+            .collect();
+        let lines = project_summary::lines(
+            &entries,
+            usize::from(inner_w),
+            usize::from(info_area.height.saturating_sub(2)),
+        );
+        f.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("Project {}", info_panel::clean(project))),
+            ),
+            info_area,
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(info_text(app, inner_w))
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::ALL).title("Session")),
+            info_area,
+        );
+    }
 
     let border = if focus {
         active_border()
@@ -352,6 +380,63 @@ mod tests {
             now,
         );
         app
+    }
+
+    fn extra_session(app: &mut App, repo: &str) {
+        let mut info = app.sessions[0].clone();
+        info.id = baton_proto::SessionId(format!("x/{repo}"));
+        info.repo = repo.into();
+        let mut all = app.sessions.clone();
+        all.push(info);
+        app.on_daemon(DaemonMsg::SessionList(all), Instant::now());
+    }
+
+    fn with_profile(mut app: App) -> App {
+        app.sessions[0].profile = Some("p".into());
+        app
+    }
+
+    #[test]
+    fn project_row_shows_the_project_summary() {
+        let mut app = with_profile(app_with_session());
+        press(&mut app, 'k');
+        let out = render(&app);
+        assert!(out.contains("Project x"), "{out}");
+        assert!(out.contains("1 work"), "{out}");
+        assert!(out.contains("1 ● a  running"), "{out}");
+        assert!(out.contains("  p"), "{out}");
+        assert!(!out.contains("Session"), "{out}");
+        assert!(!out.contains("profile  p"), "{out}");
+    }
+
+    #[test]
+    fn session_row_keeps_the_session_info() {
+        let app = with_profile(app_with_session());
+        let out = render(&app);
+        assert!(out.contains("Session"), "{out}");
+        assert!(out.contains("profile  p"), "{out}");
+        assert!(!out.contains("Project x"), "{out}");
+    }
+
+    #[test]
+    fn collapsed_project_summary_lists_hidden_sessions() {
+        let mut app = app_with_session();
+        extra_session(&mut app, "/tmp/b");
+        press(&mut app, 'k');
+        press(&mut app, ' ');
+        let out = render(&app);
+        assert!(out.contains("▸ x  (2)"), "{out}");
+        assert!(out.contains("1 ● a"), "{out}");
+        assert!(out.contains("2 ● b"), "{out}");
+    }
+
+    #[test]
+    fn project_summary_shows_the_branch() {
+        let mut app = app_with_session();
+        app.refresh_branches(|_| Some("main".into()));
+        press(&mut app, 'k');
+        let out = render(&app);
+        assert!(out.contains("⎇ main · "), "{out}");
     }
 
     #[test]
