@@ -10,3 +10,5 @@ Task 3: started
 Task 3: complete (3081f22..821a085, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/project-summary-main-pane.evidence/task-3.md
   notes: main[at + 1] indexing could panic on last row (use .get)
+Final evidence: EVIDENCE: PROVEN
+Final review: VERDICT: PASS (warning: stale doc comment on line 1 of project_summary.rs still says "lower sidebar block"; suggestions: bind summary_project() once in draw_chrome, derive sidebar width magic numbers 32/33)
