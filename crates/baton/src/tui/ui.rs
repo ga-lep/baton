@@ -124,13 +124,32 @@ pub fn draw(f: &mut Frame, app: &App) {
     if !app.is_fullscreen() {
         draw_chrome(f, app);
     }
-    match (app.scroll_view(), app.selected_mirror()) {
-        (Some(v), _) => v.render(l.inner, f.buffer_mut()),
-        (None, Some(m)) => m.screen().render(l.inner, f.buffer_mut(), focus),
-        (None, None) => f.render_widget(
-            Paragraph::new("No sessions. Start a project with `baton debug open <name>`."),
-            l.inner,
-        ),
+    if let Some(project) = app.summary_project() {
+        let sessions = app.project_sessions(project);
+        let entries: Vec<project_summary::Entry> = sessions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| project_summary::Entry {
+                n: i + 1,
+                info: s,
+                branch: app.branch(s),
+            })
+            .collect();
+        let lines = project_summary::lines(
+            &entries,
+            usize::from(l.inner.width),
+            usize::from(l.inner.height),
+        );
+        f.render_widget(Paragraph::new(lines), l.inner);
+    } else {
+        match (app.scroll_view(), app.selected_mirror()) {
+            (Some(v), _) => v.render(l.inner, f.buffer_mut()),
+            (None, Some(m)) => m.screen().render(l.inner, f.buffer_mut(), focus),
+            (None, None) => f.render_widget(
+                Paragraph::new("No sessions. Start a project with `baton debug open <name>`."),
+                l.inner,
+            ),
+        }
     }
 
     let mode = if focus { "FOCUS" } else { "NORMAL" };
@@ -199,45 +218,38 @@ fn draw_chrome(f: &mut Frame, app: &App) {
         &mut state,
     );
     let inner_w = info_area.width.saturating_sub(2);
-    if let Some(project) = app.summary_project() {
-        let sessions = app.project_sessions(project);
-        let entries: Vec<project_summary::Entry> = sessions
-            .iter()
-            .enumerate()
-            .map(|(i, s)| project_summary::Entry {
-                n: i + 1,
-                info: s,
-                branch: app.branch(s),
-            })
-            .collect();
-        let lines = project_summary::lines(
-            &entries,
-            usize::from(inner_w),
-            usize::from(info_area.height.saturating_sub(2)),
-        );
-        f.render_widget(
-            Paragraph::new(lines).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("Project {}", info_panel::clean(project))),
-            ),
-            info_area,
-        );
-    } else {
-        f.render_widget(
-            Paragraph::new(info_text(app, inner_w))
-                .wrap(Wrap { trim: true })
-                .block(Block::default().borders(Borders::ALL).title("Session")),
-            info_area,
-        );
-    }
+    f.render_widget(
+        Paragraph::new(info_text(app, inner_w))
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title("Session")),
+        info_area,
+    );
 
     let border = if focus {
         active_border()
     } else {
         Style::default()
     };
-    let mut title = app.selected_session().map_or_else(
+    let mut title = if let Some(project) = app.summary_project() {
+        format!("Project {}", info_panel::clean(project))
+    } else {
+        session_title(app)
+    };
+    if app.summary_project().is_none() && app.scroll_offset() > 0 {
+        title.push_str(&format!(" [scrollback -{}]", app.scroll_offset()));
+    }
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border)
+            .title(title),
+        l.main,
+    );
+}
+
+/// Main block title describing the current session.
+fn session_title(app: &App) -> String {
+    app.selected_session().map_or_else(
         || "Baton".to_owned(),
         |s| {
             let branch = app
@@ -252,17 +264,7 @@ fn draw_chrome(f: &mut Frame, app: &App) {
                 status_label(s.status)
             )
         },
-    );
-    if app.scroll_offset() > 0 {
-        title.push_str(&format!(" [scrollback -{}]", app.scroll_offset()));
-    }
-    f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border)
-            .title(title),
-        l.main,
-    );
+    )
 }
 
 /// The popup for a config file that failed to load; `message` keeps its line
@@ -396,17 +398,36 @@ mod tests {
         app
     }
 
+    /// The part of each line right of the sidebar (the main pane).
+    fn main_part(out: &str) -> String {
+        out.lines()
+            .map(|l| l.chars().skip(32).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The sidebar part of each line.
+    fn sidebar_part(out: &str) -> String {
+        out.lines()
+            .map(|l| l.chars().take(32).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
-    fn project_row_shows_the_project_summary() {
+    fn project_row_shows_the_project_summary_in_the_main_pane() {
         let mut app = with_profile(app_with_session());
         press(&mut app, 'k');
         let out = render(&app);
-        assert!(out.contains("Project x"), "{out}");
-        assert!(out.contains("1 work"), "{out}");
-        assert!(out.contains("1 ● a  running"), "{out}");
-        assert!(out.contains("  p"), "{out}");
-        assert!(!out.contains("Session"), "{out}");
-        assert!(!out.contains("profile  p"), "{out}");
+        let main = main_part(&out);
+        assert!(main.contains("┌Project x"), "{out}");
+        assert!(main.contains("1 work"), "{out}");
+        assert!(main.contains("1 ● a  running"), "{out}");
+        let side = sidebar_part(&out);
+        assert!(side.contains("Session"), "{out}");
+        assert!(side.contains("profile  p"), "{out}");
+        assert!(!out.contains("mirrored text"), "{out}");
+        assert!(!out.contains("a · p · ● running"), "{out}");
     }
 
     #[test]
@@ -415,6 +436,7 @@ mod tests {
         let out = render(&app);
         assert!(out.contains("Session"), "{out}");
         assert!(out.contains("profile  p"), "{out}");
+        assert!(out.contains("mirrored text"), "{out}");
         assert!(!out.contains("Project x"), "{out}");
     }
 
@@ -425,9 +447,10 @@ mod tests {
         press(&mut app, 'k');
         press(&mut app, ' ');
         let out = render(&app);
-        assert!(out.contains("▸ x  (2)"), "{out}");
-        assert!(out.contains("1 ● a"), "{out}");
-        assert!(out.contains("2 ● b"), "{out}");
+        assert!(sidebar_part(&out).contains("▸ x  (2)"), "{out}");
+        let main = main_part(&out);
+        assert!(main.contains("1 ● a"), "{out}");
+        assert!(main.contains("2 ● b"), "{out}");
     }
 
     #[test]
@@ -436,9 +459,17 @@ mod tests {
         app.refresh_branches(|_| Some("main".into()));
         press(&mut app, 'k');
         let out = render(&app);
-        // Sidebar-specific: the main panel title also contains `⎇ main · `.
-        assert!(out.contains("│1 ● a  running"), "{out}");
-        assert!(out.contains("│  ⎇ main · default"), "{out}");
+        assert!(main_part(&out).contains("⎇ main · default"), "{out}");
+    }
+
+    #[test]
+    fn focus_mode_never_shows_the_summary() {
+        let mut app = app_with_session();
+        press(&mut app, 'k');
+        app.mode = Mode::Focus;
+        let out = render(&app);
+        assert!(out.contains("mirrored text"), "{out}");
+        assert!(!out.contains("Project x"), "{out}");
     }
 
     #[test]
@@ -504,6 +535,7 @@ mod tests {
         app.sessions[0].profile = Some("p".into());
         let out = render(&app);
         assert!(out.contains("a · p · ● running"), "{out}");
+        assert!(out.contains("mirrored text"), "{out}");
         for field in ["/tmp/a", "profile  p", "status   running", "uptime   "] {
             assert!(out.contains(field), "{field}: {out}");
         }
