@@ -280,6 +280,24 @@ impl App {
         self.cursor.as_ref()
     }
 
+    /// The project to summarize: the cursor's project, only when the cursor is
+    /// on a project row.
+    // Used by the sidebar from Task 2 of project-summary-pane; remove then.
+    #[allow(dead_code)]
+    pub fn summary_project(&self) -> Option<&str> {
+        match self.cursor.as_ref()? {
+            Cursor::Project(name) => Some(name),
+            Cursor::Session(_) => None,
+        }
+    }
+
+    /// The sessions of project `name`, in sidebar order.
+    // Used by the sidebar from Task 2 of project-summary-pane; remove then.
+    #[allow(dead_code)]
+    pub fn project_sessions(&self, name: &str) -> Vec<&SessionInfo> {
+        self.sessions.iter().filter(|s| s.project == name).collect()
+    }
+
     /// Index of the cursor among `rows()`.
     pub fn cursor_index(&self) -> Option<usize> {
         let cursor = self.cursor.as_ref()?;

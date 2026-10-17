@@ -9,6 +9,9 @@ pub mod info_panel;
 pub mod keys;
 pub mod labels;
 pub mod mirror;
+// Not wired into the UI until Task 2 of project-summary-pane; remove then.
+#[allow(dead_code)]
+pub mod project_summary;
 pub mod render_pacer;
 pub mod scrollback;
 pub mod sidebar;

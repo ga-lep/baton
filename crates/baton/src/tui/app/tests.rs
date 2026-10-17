@@ -1262,3 +1262,31 @@ fn fullscreen_ends_when_the_shown_session_disappears() {
     assert_eq!(app.layout, layout(HOST));
     assert_eq!(resizes(&fx), [(37, 86)]);
 }
+
+#[test]
+fn summary_project_is_set_only_on_a_project_row() {
+    let mut app = tree_app();
+    assert_eq!(app.summary_project(), None);
+    app.on_event(ch('k'), HOST);
+    assert_eq!(app.summary_project(), Some("x"));
+    app.on_event(ch('j'), HOST);
+    assert_eq!(app.summary_project(), None);
+    app.cursor = None;
+    assert_eq!(app.summary_project(), None);
+}
+
+#[test]
+fn project_sessions_follow_sidebar_order_even_when_collapsed() {
+    let mut app = tree_app();
+    let ids = |app: &App| -> Vec<String> {
+        app.project_sessions("x")
+            .iter()
+            .map(|s| s.id.0.clone())
+            .collect()
+    };
+    assert_eq!(ids(&app), vec!["x//a", "x//b"]);
+    app.on_event(ch('k'), HOST);
+    app.on_event(ch(' '), HOST);
+    assert_eq!(ids(&app), vec!["x//a", "x//b"]);
+    assert!(app.project_sessions("y").is_empty());
+}
