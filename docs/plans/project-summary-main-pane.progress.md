@@ -6,3 +6,4 @@ Task 2: started
 Task 2: complete (7271c48..fdde08b, gate ok, security PASS, review PASS, evidence PROVEN)
   evidence: docs/plans/project-summary-main-pane.evidence/task-2.md
   notes: sidebar asserts use contains("Session") (could pin ┌Session); draw_chrome calls summary_project() twice for title
+Task 3: started
