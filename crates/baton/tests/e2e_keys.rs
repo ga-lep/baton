@@ -268,6 +268,22 @@ fn fullscreen_drops_borders_and_mouse_capture_and_restores_them() -> Result<()> 
     Ok(())
 }
 
+/// The part of each screen line right of the sidebar (column > 32).
+fn main_pane(d: &Drive) -> Vec<String> {
+    d.screen_text()
+        .lines()
+        .map(|l| l.chars().skip(33).collect())
+        .collect()
+}
+
+/// The sidebar part of each screen line (columns 0..=32).
+fn sidebar(d: &Drive) -> Vec<String> {
+    d.screen_text()
+        .lines()
+        .map(|l| l.chars().take(33).collect())
+        .collect()
+}
+
 #[test]
 fn project_row_shows_a_summary_of_its_sessions() -> Result<()> {
     let env = Env::new("")?;
@@ -282,32 +298,77 @@ fn project_row_shows_a_summary_of_its_sessions() -> Result<()> {
     wait(&d, "1 ○ alpha  idle")?;
     wait(&d, "2 ○ beta  idle")?;
 
-    // Move up to the project row (at most 3 presses).
+    // Move up to the project row (at most 3 presses), waiting for the screen
+    // to show the summary after each one.
+    let on_project = |d: &Drive| {
+        main_pane(d).iter().any(|l| l.contains("Project x"))
+            && sidebar(d).iter().any(|l| l.contains("▾ x"))
+    };
     for _ in 0..3 {
-        if d.screen_text().contains("▾ x") && d.screen_text().contains("2 idle") {
+        if on_project(&d) {
             break;
         }
         d.send(b"k")?;
-        std::thread::sleep(Duration::from_millis(150));
+        let end = Instant::now() + Duration::from_secs(2);
+        while !on_project(&d) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
-    wait(&d, "Project x")?;
+    wait_until(&d, "cursor on the project row", on_project)?;
     wait(&d, "2 idle")?;
-    // The entry sits inside the lower block, which has the `Project x` title above it.
-    let text = d.screen_text();
-    let lines: Vec<&str> = text.lines().collect();
-    let title = lines
-        .iter()
-        .position(|l| l.contains("Project x"))
-        .expect("title");
-    let below = lines[title..].join("\n");
-    assert!(below.contains("1 ○ alpha  idle"), "{}", d.dump());
-    assert!(below.contains("  p"), "{}", d.dump());
-    assert!(!below.contains('⎇'), "{}", d.dump());
 
-    // Back on a session row the block is the Session panel again.
+    let main = main_pane(&d);
+    let at = main
+        .iter()
+        .position(|l| l.contains("1 ○ alpha  idle"))
+        .unwrap_or_else(|| panic!("{}", d.dump()));
+    // The second line of the entry holds the profile and no branch.
+    assert!(main[at + 1].starts_with("  p"), "{}", d.dump());
+    assert!(!main[at + 1].contains('⎇'), "{}", d.dump());
+    assert!(
+        main.iter().any(|l| l.contains("2 ○ beta  idle")),
+        "{}",
+        d.dump()
+    );
+    assert!(
+        !d.screen_text()
+            .lines()
+            .any(|l| l.starts_with("FAKE CLAUDE")),
+        "{}",
+        d.dump()
+    );
+    // The sidebar keeps the Session block and does not repeat the summary.
+    let side = sidebar(&d);
+    assert!(side.iter().any(|l| l.contains("Session")), "{}", d.dump());
+    assert!(
+        !side.iter().any(|l| l.contains("Project x")),
+        "{}",
+        d.dump()
+    );
+    assert!(!side.iter().any(|l| l.contains("2 idle")), "{}", d.dump());
+    assert!(
+        side.iter().any(|l| l.contains("profile  p")),
+        "{}",
+        d.dump()
+    );
+
+    // `r` acts on a hidden session, so it only shows a hint.
+    d.send(b"r")?;
+    wait_until(&d, "hint on the bottom row", |d| {
+        d.screen_text()
+            .lines()
+            .last()
+            .is_some_and(|l| l.contains("select a session first"))
+    })?;
+
+    // Back on a session row the main pane mirrors the session again.
     d.send(b"j")?;
-    wait(&d, "Session")?;
-    wait(&d, "profile  p")?;
+    wait_until(&d, "session mirror", |d| {
+        let t = d.screen_text();
+        t.lines().any(|l| l.contains("FAKE CLAUDE"))
+            && t.contains("alpha · p · ")
+            && !t.contains("Project x")
+    })?;
 
     d.send(b"q")?;
     assert_eq!(d.wait_exit(WAIT)?, 0);
