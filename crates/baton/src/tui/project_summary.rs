@@ -1,6 +1,6 @@
-//! The project summary shown in the lower sidebar block while the cursor is
-//! on a project row: a tally of what the sessions are doing, then one entry
-//! per session.
+//! The project summary drawn in the main pane while the cursor is on a project
+//! row in normal mode (not focus mode, not fullscreen): a tally of what the
+//! sessions are doing, then one entry per session.
 
 use baton_core::attention::needs_attention;
 use baton_proto::{SessionInfo, Status};
