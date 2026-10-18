@@ -3,6 +3,8 @@ name = "baton-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Terminal UI for running and supervising several Claude Code sessions"
+repository = "https://github.com/ga-lep/baton"
 publish = ["crates-io"]
 
 [lints]
@@ -10,7 +12,7 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
-baton-core = { version = "0.2.10", path = "../baton-core" }
+baton-core = { version = "0.2.11", path = "../baton-core" }
 crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui = "0.30"
 tui-term = "0.3"
@@ -18,7 +20,7 @@ vt100 = "0.16"
 anyhow.workspace = true
 portable-pty.workspace = true
 serde_json.workspace = true
-baton-proto = { version = "0.2.10", path = "../baton-proto" }
+baton-proto = { version = "0.2.11", path = "../baton-proto" }
 bytes = "1"
 futures-util = { version = "0.3", features = ["sink"] }
 nix = { workspace = true, features = ["fs", "signal", "process", "user"] }
