@@ -421,7 +421,8 @@ mod tests {
         let out = render(&app);
         let main = main_part(&out);
         assert!(main.contains("┌Project x"), "{out}");
-        assert!(main.contains("1 work"), "{out}");
+        assert!(main.contains("1 running"), "{out}");
+        assert!(!main.contains("work ·"), "{out}");
         assert!(main.contains("1 ● a  running"), "{out}");
         let side = sidebar_part(&out);
         assert!(side.contains("Session"), "{out}");

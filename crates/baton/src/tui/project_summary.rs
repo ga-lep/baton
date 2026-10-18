@@ -1,6 +1,7 @@
 //! The project summary drawn in the main pane while the cursor is on a project
-//! row in normal mode (not focus mode, not fullscreen): a tally of what the
-//! sessions are doing, then one entry per session.
+//! row in normal mode (not focus mode, not fullscreen): a tally that counts
+//! the sessions by their status, using the same labels as the rest of the app,
+//! then one entry per session.
 
 use baton_core::attention::needs_attention;
 use baton_proto::{SessionInfo, Status};
@@ -11,41 +12,19 @@ use super::info_panel::{clean, clip};
 use super::labels::{badge, status_label};
 use super::sidebar::repo_name;
 
-/// What a session is doing, in the user's words.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Activity {
-    /// The process is running (starting, running, or no hook events yet).
-    Work,
-    /// Waiting for the user.
-    Wait,
-    /// Idle.
-    Idle,
-    /// Exited or only remembered.
-    Off,
-}
-
-impl Activity {
-    /// Tally order and wording.
-    const ALL: [(Activity, &'static str); 4] = [
-        (Activity::Work, "work"),
-        (Activity::Wait, "wait"),
-        (Activity::Idle, "idle"),
-        (Activity::Off, "off"),
-    ];
-}
-
-/// The activity group of a status.
-pub fn activity(status: Status) -> Activity {
-    if needs_attention(status) {
-        return Activity::Wait;
-    }
-    match status {
-        Status::Starting | Status::Running | Status::Unknown => Activity::Work,
-        Status::Idle => Activity::Idle,
-        Status::Permission | Status::YourTurn => Activity::Wait,
-        Status::Exited(_) | Status::Closed => Activity::Off,
-    }
-}
+/// Tally groups in display order: the word and a representative status.
+/// A session belongs to the group whose status has the same variant, so
+/// `Exited(_)` matches every exit code.
+const GROUPS: [(&str, Status); 8] = [
+    ("running", Status::Running),
+    ("permission", Status::Permission),
+    ("your turn", Status::YourTurn),
+    ("idle", Status::Idle),
+    ("starting", Status::Starting),
+    ("unknown", Status::Unknown),
+    ("exited", Status::Exited(0)),
+    ("closed", Status::Closed),
+];
 
 /// One session of the summarized project.
 pub struct Entry<'a> {
@@ -90,12 +69,12 @@ pub fn lines(entries: &[Entry<'_>], width: usize, height: usize) -> Vec<Line<'st
 }
 
 fn tally(entries: &[Entry<'_>]) -> String {
-    Activity::ALL
+    GROUPS
         .iter()
-        .filter_map(|(a, word)| {
+        .filter_map(|(word, group)| {
             let n = entries
                 .iter()
-                .filter(|e| activity(e.info.status) == *a)
+                .filter(|e| std::mem::discriminant(&e.info.status) == std::mem::discriminant(group))
                 .count();
             (n > 0).then(|| format!("{n} {word}"))
         })
@@ -175,23 +154,6 @@ mod tests {
     }
 
     #[test]
-    fn activity_maps_every_status() {
-        let table = [
-            (Status::Starting, Activity::Work),
-            (Status::Running, Activity::Work),
-            (Status::Unknown, Activity::Work),
-            (Status::Permission, Activity::Wait),
-            (Status::YourTurn, Activity::Wait),
-            (Status::Idle, Activity::Idle),
-            (Status::Exited(3), Activity::Off),
-            (Status::Closed, Activity::Off),
-        ];
-        for (status, want) in table {
-            assert_eq!(activity(status), want, "{status:?}");
-        }
-    }
-
-    #[test]
     fn no_entries_say_no_sessions() {
         assert_eq!(texts(&lines(&[], 30, 14)), vec!["no sessions"]);
     }
@@ -204,11 +166,11 @@ mod tests {
             info("cli", None, Status::Idle),
         ];
         let es = entries(&infos, &[Some("main"), None, Some("feat/x")]);
-        let ls = lines(&es, 30, 14);
+        let ls = lines(&es, 40, 14);
         assert_eq!(
             texts(&ls),
             vec![
-                "1 work · 1 wait · 1 idle",
+                "1 running · 1 permission · 1 idle",
                 "1 ● api  running",
                 "  ⎇ main · work",
                 "2 ◐ web  permission",
@@ -229,11 +191,63 @@ mod tests {
     }
 
     #[test]
-    fn exited_counts_as_off_and_empty_groups_are_left_out() {
-        let infos = [info("api", None, Status::Exited(2))];
-        let ls = lines(&entries(&infos, &[None]), 30, 14);
-        assert_eq!(text(&ls[0]), "1 off");
+    fn running_your_turn_idle_tally() {
+        let infos = [
+            info("a", None, Status::Running),
+            info("b", None, Status::YourTurn),
+            info("c", None, Status::Idle),
+        ];
+        let ls = lines(&entries(&infos, &[None; 3]), 40, 14);
+        assert_eq!(text(&ls[0]), "1 running · 1 your turn · 1 idle");
+        let yellow_bold = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
+        assert_eq!(ls[3].style, yellow_bold);
+        assert_eq!(ls[5].style, Style::default());
+    }
+
+    #[test]
+    fn exited_sessions_are_counted_together() {
+        let infos = [
+            info("api", None, Status::Exited(2)),
+            info("web", None, Status::Exited(0)),
+        ];
+        let ls = lines(&entries(&infos, &[None; 2]), 30, 14);
+        assert_eq!(text(&ls[0]), "2 exited");
         assert_eq!(text(&ls[1]), "1 ✗ api  exited 2");
+        assert_eq!(text(&ls[3]), "2 ✗ web  exited 0");
+    }
+
+    #[test]
+    fn every_status_group_in_fixed_order() {
+        let infos = [
+            info("a", None, Status::Closed),
+            info("b", None, Status::Idle),
+            info("c", None, Status::Exited(9)),
+            info("d", None, Status::Running),
+            info("e", None, Status::Unknown),
+            info("f", None, Status::YourTurn),
+            info("g", None, Status::Starting),
+            info("h", None, Status::Permission),
+        ];
+        let ls = lines(&entries(&infos, &[None; 8]), 200, 40);
+        assert_eq!(
+            text(&ls[0]),
+            "1 running · 1 permission · 1 your turn · 1 idle · 1 starting · 1 unknown · 1 exited · 1 closed"
+        );
+    }
+
+    #[test]
+    fn group_words_match_status_labels() {
+        assert_eq!(GROUPS.len(), 8);
+        for (word, status) in GROUPS {
+            let label = status_label(status);
+            if matches!(status, Status::Exited(_)) {
+                assert!(label.starts_with(word), "{label}");
+            } else {
+                assert_eq!(label, word);
+            }
+        }
     }
 
     #[test]

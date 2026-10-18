@@ -59,7 +59,7 @@ Target workflow: **2–4 hands-on sessions at a time**, steered closely, one per
 - Estimated cost (from token counts × configured price table; labeled "est.")
 
 **Project summary** (shown in the main pane when the cursor is on a project row in normal mode)
-- Tally of the project's sessions: work / wait / idle / off.
+- Tally of the project's sessions by status, with the app's status labels (e.g. 1 running · 1 your turn · 1 idle; exited sessions are counted together as exited).
 - Per session: number, badge, repo, status, git branch and profile.
 
 **Other**
