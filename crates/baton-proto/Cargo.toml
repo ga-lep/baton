@@ -3,6 +3,8 @@ name = "baton-proto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Wire protocol (messages and framing) shared by the baton daemon and TUI"
+repository = "https://github.com/ga-lep/baton"
 publish = ["crates-io"]
 
 [lints]

@@ -3,13 +3,15 @@ name = "baton-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Core logic for baton: config, session status and attention rules"
+repository = "https://github.com/ga-lep/baton"
 publish = ["crates-io"]
 
 [lints]
 workspace = true
 
 [dependencies]
-baton-proto = { version = "0.2.10", path = "../baton-proto" }
+baton-proto = { version = "0.2.11", path = "../baton-proto" }
 nix = { workspace = true, features = ["user"] }
 serde = { workspace = true, features = ["derive"] }
 semver.workspace = true
