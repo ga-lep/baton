@@ -221,7 +221,7 @@ pub fn lines(
 
 /// Drops control characters and invisible formatting characters (bidi
 /// overrides, zero-width marks) from text that came from outside the TUI.
-fn clean(s: &str) -> String {
+pub(crate) fn clean(s: &str) -> String {
     s.chars()
         .filter(|c| {
             !c.is_control()
@@ -233,7 +233,7 @@ fn clean(s: &str) -> String {
 }
 
 /// At most `width` characters of `s`.
-fn clip(s: &str, width: usize) -> String {
+pub(crate) fn clip(s: &str, width: usize) -> String {
     s.chars().take(width).collect()
 }
 

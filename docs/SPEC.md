@@ -58,6 +58,10 @@ Target workflow: **2–4 hands-on sessions at a time**, steered closely, one per
 - Context window usage % and token totals (in / out / cache)
 - Estimated cost (from token counts × configured price table; labeled "est.")
 
+**Project summary** (shown in the main pane when the cursor is on a project row in normal mode)
+- Tally of the project's sessions by status, with the app's status labels (e.g. 1 running · 1 your turn · 1 idle; exited sessions are counted together as exited).
+- Per session: number, badge, repo, status, git branch and profile.
+
 **Other**
 - `e` opens the session's repo in the configured editor/IDE (detached GUI process).
 - Config: projects, repos, profiles, per-repo extra `claude` args, editor command, notifications toggle, **remappable keybindings**.
@@ -95,6 +99,8 @@ In normal mode, the Projects pane border and title are highlighted; in focus
 mode, the main panel border is highlighted and the bottom bar reads
 `FOCUS │ Ctrl-\ back  Alt-n next-attention  Alt-1..9 session  Alt-z fullscreen`.
 
+When the cursor is on a project row (normal mode), the main pane is titled `Project <name>` and shows the project summary instead of a session; the `Session` block keeps describing the last shown session. `r`, `e`, `z` and the scroll keys need a session row there.
+
 ### Status badges
 
 | Badge | State | Meaning |
@@ -119,11 +125,11 @@ mode, the main panel border is highlighted and the bottom bar reads
 | `Space` | Collapse / expand the project under the cursor (`▸ name  (N)` while collapsed; highlighted if a hidden session needs attention). Jumping to a hidden session (`n`, `1`–`9`) expands it |
 | `1`..`9` | Select session N of the current project |
 | `n` | Jump to next session needing attention |
-| `r` | Restart selected session (`--resume` same conversation) |
-| `e` | Open repo in editor |
-| `Ctrl-u` / `Ctrl-d`, `PgUp` / `PgDn` | Scroll session pane scrollback |
+| `r` | Restart shown session (not on a project row; `--resume` same conversation) |
+| `e` | Open shown session's repo in editor (not on a project row) |
+| `Ctrl-u` / `Ctrl-d`, `PgUp` / `PgDn` | Scroll shown session's scrollback (not on a project row) |
 | `G` | Snap pane back to live bottom |
-| `z` / `Alt-z` | Toggle fullscreen: the session pane fills the terminal above the bottom bar (`Esc` also leaves it) |
+| `z` / `Alt-z` | Toggle fullscreen (not on a project row): the session pane fills the terminal above the bottom bar (`Esc` also leaves it) |
 | `?` | Help overlay |
 | `q` | Quit TUI (sessions keep running) |
 
@@ -248,7 +254,7 @@ One binary, `baton`, with subcommands:
 - Main panel: `tui-term`'s `PseudoTerminal` widget over the local `vt100` mirror.
 - **Input encoding**: crossterm `KeyEvent` → terminal byte sequences (xterm encoding, respecting the app's DECCKM / bracketed-paste modes read from the mirror). Bracketed paste is forwarded intact. This encoder is hand-written and tested. It is the piece most likely to have bugs (see risks).
 - Terminal focus tracking (crossterm `FocusGained` / `FocusLost`) feeds the notification rule.
-- Notifications are sent **by the daemon** (`notify-rust`), so they fire even when no TUI is attached. The client reports what is on screen and whether the terminal is focused, so the daemon can suppress notifications for the session you're already looking at.
+- Notifications are sent **by the daemon** (`notify-rust`), so they fire even when no TUI is attached. The client reports what is on screen and whether the terminal is focused, so the daemon can suppress notifications for the session you're already looking at. Nothing is on screen while a project summary is shown.
 
 ### Language decision: **Rust**
 

@@ -398,7 +398,9 @@ fn enter_and_l_focus_sessions_and_open_closed_projects() {
     let mut app = tree_app();
     app.on_event(ch('k'), HOST);
     cursor_is(&app, Cursor::Project("x".into()));
-    assert!(app.on_event(key(KeyCode::Enter), HOST).is_empty());
+    // Leaving the summary puts the session back on screen.
+    let fx = app.on_event(key(KeyCode::Enter), HOST);
+    assert_eq!(views(&fx), vec![(Some(sid("x//a")), true)]);
     cursor_is(&app, Cursor::Session(sid("x//a")));
 }
 
@@ -1261,4 +1263,84 @@ fn fullscreen_ends_when_the_shown_session_disappears() {
     assert!(!app.is_fullscreen());
     assert_eq!(app.layout, layout(HOST));
     assert_eq!(resizes(&fx), [(37, 86)]);
+}
+
+#[test]
+fn summary_project_is_set_only_on_a_project_row() {
+    let mut app = tree_app();
+    assert_eq!(app.summary_project(), None);
+    app.on_event(ch('k'), HOST);
+    assert_eq!(app.summary_project(), Some("x"));
+    app.on_event(ch('j'), HOST);
+    assert_eq!(app.summary_project(), None);
+    app.cursor = None;
+    assert_eq!(app.summary_project(), None);
+
+    // Focus mode never shows the summary.
+    let mut app = tree_app();
+    app.on_event(key(KeyCode::Enter), HOST);
+    assert_eq!(app.mode, Mode::Focus);
+    app.cursor = Some(Cursor::Project("x".into()));
+    assert_eq!(app.summary_project(), None);
+
+    // Neither does fullscreen.
+    let mut app = tree_app();
+    app.on_event(ch('z'), HOST);
+    assert!(app.is_fullscreen());
+    app.on_event(ch('k'), HOST);
+    app.on_event(ch('k'), HOST);
+    cursor_is(&app, Cursor::Project("x".into()));
+    assert_eq!(app.summary_project(), None);
+}
+
+#[test]
+fn on_screen_is_none_while_a_project_summary_is_shown() {
+    let mut app = tree_app();
+    let fx = app.on_event(ch('k'), HOST);
+    assert_eq!(views(&fx), vec![(None, true)]);
+    assert_eq!(shown(&app), Some("x//a"));
+    let fx = app.on_event(ch('j'), HOST);
+    assert_eq!(views(&fx), vec![(Some(sid("x//a")), true)]);
+    assert_eq!(shown(&app), Some("x//a"));
+}
+
+#[test]
+fn session_keys_on_a_project_row_only_hint() {
+    let mut app = tree_app();
+    app.on_daemon(
+        DaemonMsg::SessionList(vec![info("x//a", Status::Idle), info("x//b", Status::Idle)]),
+        Instant::now(),
+    );
+    let fx = app.on_event(ch('r'), HOST);
+    assert_eq!(
+        fx,
+        vec![Effect::Send(ClientMsg::Restart {
+            session: sid("x//a")
+        })]
+    );
+
+    app.on_event(ch('k'), HOST);
+    assert_eq!(app.summary_project(), Some("x"));
+    for ev in [ch('r'), ch('e'), ctrl('u'), ctrl('d'), ch('z')] {
+        app.hint = None;
+        assert!(app.on_event(ev, HOST).is_empty());
+        assert!(!app.is_fullscreen());
+        assert_eq!(app.hint, Some(SELECT_SESSION_HINT));
+    }
+}
+
+#[test]
+fn project_sessions_follow_sidebar_order_even_when_collapsed() {
+    let mut app = tree_app();
+    let ids = |app: &App| -> Vec<String> {
+        app.project_sessions("x")
+            .iter()
+            .map(|s| s.id.0.clone())
+            .collect()
+    };
+    assert_eq!(ids(&app), vec!["x//a", "x//b"]);
+    app.on_event(ch('k'), HOST);
+    app.on_event(ch(' '), HOST);
+    assert_eq!(ids(&app), vec!["x//a", "x//b"]);
+    assert!(app.project_sessions("y").is_empty());
 }

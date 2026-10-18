@@ -267,3 +267,110 @@ fn fullscreen_drops_borders_and_mouse_capture_and_restores_them() -> Result<()> 
     wait_until(&d, "never windowed again", is_windowed)?;
     Ok(())
 }
+
+/// The part of each screen line right of the sidebar (column > 32).
+fn main_pane(d: &Drive) -> Vec<String> {
+    d.screen_text()
+        .lines()
+        .map(|l| l.chars().skip(33).collect())
+        .collect()
+}
+
+/// The sidebar part of each screen line (columns 0..=32).
+fn sidebar(d: &Drive) -> Vec<String> {
+    d.screen_text()
+        .lines()
+        .map(|l| l.chars().take(33).collect())
+        .collect()
+}
+
+#[test]
+fn project_row_shows_a_summary_of_its_sessions() -> Result<()> {
+    let env = Env::new("")?;
+    let mut d = env.tui()?;
+    wait(&d, "▸ x  \\(closed\\)")?;
+
+    // The cursor is on the closed project.
+    wait(&d, "Project x")?;
+    wait(&d, "no sessions")?;
+
+    d.send(b"o")?;
+    wait(&d, "1 ○ alpha  idle")?;
+    wait(&d, "2 ○ beta  idle")?;
+
+    // Move up to the project row (at most 3 presses), waiting for the screen
+    // to show the summary after each one.
+    let on_project = |d: &Drive| {
+        main_pane(d).iter().any(|l| l.contains("Project x"))
+            && sidebar(d).iter().any(|l| l.contains("▾ x"))
+    };
+    for _ in 0..3 {
+        if on_project(&d) {
+            break;
+        }
+        d.send(b"k")?;
+        let end = Instant::now() + Duration::from_secs(2);
+        while !on_project(&d) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    wait_until(&d, "cursor on the project row", on_project)?;
+    wait(&d, "2 idle")?;
+
+    let main = main_pane(&d);
+    let at = main
+        .iter()
+        .position(|l| l.contains("1 ○ alpha  idle"))
+        .unwrap_or_else(|| panic!("{}", d.dump()));
+    // The second line of the entry holds the profile and no branch.
+    assert!(main[at + 1].starts_with("  p"), "{}", d.dump());
+    assert!(!main[at + 1].contains('⎇'), "{}", d.dump());
+    assert!(
+        main.iter().any(|l| l.contains("2 ○ beta  idle")),
+        "{}",
+        d.dump()
+    );
+    assert!(
+        !d.screen_text()
+            .lines()
+            .any(|l| l.starts_with("FAKE CLAUDE")),
+        "{}",
+        d.dump()
+    );
+    // The sidebar keeps the Session block and does not repeat the summary.
+    let side = sidebar(&d);
+    assert!(side.iter().any(|l| l.contains("Session")), "{}", d.dump());
+    assert!(
+        !side.iter().any(|l| l.contains("Project x")),
+        "{}",
+        d.dump()
+    );
+    assert!(!side.iter().any(|l| l.contains("2 idle")), "{}", d.dump());
+    assert!(
+        side.iter().any(|l| l.contains("profile  p")),
+        "{}",
+        d.dump()
+    );
+
+    // `r` acts on a hidden session, so it only shows a hint.
+    d.send(b"r")?;
+    wait_until(&d, "hint on the bottom row", |d| {
+        d.screen_text()
+            .lines()
+            .last()
+            .is_some_and(|l| l.contains("select a session first"))
+    })?;
+
+    // Back on a session row the main pane mirrors the session again.
+    d.send(b"j")?;
+    wait_until(&d, "session mirror", |d| {
+        let t = d.screen_text();
+        t.lines().any(|l| l.contains("FAKE CLAUDE"))
+            && t.contains("alpha · p · ")
+            && !t.contains("Project x")
+    })?;
+
+    d.send(b"q")?;
+    assert_eq!(d.wait_exit(WAIT)?, 0);
+    Ok(())
+}

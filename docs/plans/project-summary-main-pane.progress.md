@@ -1,0 +1,14 @@
+Task 1: started
+Task 1: complete (4f04482..41ccd61, gate ok, security PASS, review PASS, evidence N/A)
+  evidence: docs/plans/project-summary-main-pane.evidence/task-1.md
+  notes: existing Enter test changed (plan oversight, justified); refuse_on_project_row mutates hint in a match guard (add comment); z on project row now gives SELECT_SESSION_HINT
+Task 2: started
+Task 2: complete (7271c48..fdde08b, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/project-summary-main-pane.evidence/task-2.md
+  notes: sidebar asserts use contains("Session") (could pin ┌Session); draw_chrome calls summary_project() twice for title
+Task 3: started
+Task 3: complete (3081f22..821a085, gate ok, security PASS, review PASS, evidence PROVEN)
+  evidence: docs/plans/project-summary-main-pane.evidence/task-3.md
+  notes: main[at + 1] indexing could panic on last row (use .get)
+Final evidence: EVIDENCE: PROVEN
+Final review: VERDICT: PASS (warning: stale doc comment on line 1 of project_summary.rs still says "lower sidebar block"; suggestions: bind summary_project() once in draw_chrome, derive sidebar width magic numbers 32/33)

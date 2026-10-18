@@ -9,6 +9,7 @@ pub mod info_panel;
 pub mod keys;
 pub mod labels;
 pub mod mirror;
+pub mod project_summary;
 pub mod render_pacer;
 pub mod scrollback;
 pub mod sidebar;
