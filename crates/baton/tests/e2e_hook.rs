@@ -220,16 +220,26 @@ fn fake_claude_session_start_reaches_the_daemon() -> Result<()> {
     let id = env.id()?;
     env.debug(&["open", "x"])?;
     let info = wait_for(WAIT, || {
-        env.sessions()
-            .ok()?
-            .into_iter()
-            .find(|s| s.claude_session_id.is_some())
+        env.sessions().ok()?.into_iter().find(|s| {
+            // The id can be known from launch; wait for SessionStart's fields.
+            s.claude_session_id.is_some() && s.transcript_path.is_some() && s.model.is_some()
+        })
     })?;
     let claude_id = info.claude_session_id.clone().unwrap_or_default();
-    let screen = env.debug(&["screen", &id])?;
+    // The hook registers the session id before the PTY has rendered anything,
+    // so poll the screen instead of reading it once.
+    let expected = format!("FAKE CLAUDE session={claude_id} ");
+    let last_screen = std::cell::RefCell::new(String::new());
+    let seen = wait_for(WAIT, || {
+        let screen = env.debug(&["screen", &id]).ok()?;
+        let found = screen.contains(&expected);
+        *last_screen.borrow_mut() = screen;
+        found.then_some(())
+    });
     assert!(
-        screen.contains(&format!("FAKE CLAUDE session={claude_id} ")),
-        "{screen}"
+        seen.is_ok(),
+        "screen never contained {expected:?}; last screen: {:?}",
+        last_screen.borrow()
     );
     let transcript = PathBuf::from(info.transcript_path.clone().unwrap_or_default());
     assert!(transcript.starts_with(env.fake_home()), "{transcript:?}");
