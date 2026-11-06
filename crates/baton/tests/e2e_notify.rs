@@ -138,10 +138,12 @@ fn notifies_when_no_tui_is_attached_and_not_again_while_in_the_state() -> Result
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(env.log_lines().len(), 1);
     env.send("allow\\r")?;
-    env.wait_lines(2)?; // your turn
+    // Finishing the turn is silent; only a new permission prompt notifies.
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(env.log_lines().len(), 1);
     env.send("perm\\r")?;
-    let lines = env.wait_lines(3)?;
-    assert!(lines[2].ends_with(" Permission"), "{lines:?}");
+    let lines = env.wait_lines(2)?;
+    assert!(lines[1].ends_with(" Permission"), "{lines:?}");
     Ok(())
 }
 

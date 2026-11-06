@@ -50,7 +50,7 @@ Target workflow: **2–4 hands-on sessions at a time**, steered closely, one per
 - Status per session, driven by Claude Code hooks plus process supervision (see §6).
 - "Needs attention" = needs permission, or finished its turn and you haven't looked yet.
 - `n` / `Alt-n` jumps to the next session needing attention.
-- Desktop notification (`notify-send` via D-Bus) when a session starts needing attention and either the TUI isn't attached, the terminal isn't focused, or that session isn't the one on screen.
+- Desktop notification (`notify-send` via D-Bus) when Claude asks the user something (permission prompt or question; not when a turn merely finishes) and either the TUI isn't attached, the terminal isn't focused, or that session isn't the one on screen.
 
 **Session info panel** (selected session)
 - Project / repo path, profile, model, status, uptime

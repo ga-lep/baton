@@ -1,6 +1,5 @@
 //! When a status change deserves a desktop notification, and what it says.
 
-use crate::attention::needs_attention;
 use baton_proto::{SessionId, Status};
 
 /// What the attached client shows (mirrors `ClientMsg::ClientView`).
@@ -17,8 +16,9 @@ pub const MAX_TEXT_CHARS: usize = 80;
 
 /// Whether the move `prev` -> `new` of `session` should raise a notification.
 ///
-/// It must enter an attention state (a different one than before), and the
-/// user must not already be looking: no client attached (`view` is `None`),
+/// It must newly enter [`Status::Permission`] (Claude asking the user a
+/// permission or a question); finishing a turn (`YourTurn`) only badges the
+/// sidebar and never raises a notification. The user must not already be looking: no client attached (`view` is `None`),
 /// the terminal unfocused, or another session on screen.
 pub fn should_notify(
     prev: Status,
@@ -27,7 +27,7 @@ pub fn should_notify(
     session: &SessionId,
     enabled: bool,
 ) -> bool {
-    if !enabled || new == prev || !needs_attention(new) {
+    if !enabled || new == prev || new != Status::Permission {
         return false;
     }
     match view {
@@ -49,12 +49,11 @@ pub fn sanitize(text: &str) -> String {
     out
 }
 
-/// The notification summary for a session in an attention `status`, or
-/// `None` if the status needs no attention.
+/// The notification summary for a session in `status`, or `None` if that
+/// status never notifies.
 pub fn summary(repo: &str, status: Status) -> Option<String> {
     let what = match status {
         Status::Permission => "needs permission",
-        Status::YourTurn => "your turn",
         _ => return None,
     };
     Some(format!("{}: {what}", sanitize(repo)))
@@ -85,8 +84,9 @@ mod tests {
                 for on_screen in [false, true] {
                     for (prev, new, entering) in [
                         (Running, Permission, true),
-                        (Running, YourTurn, true),
-                        (Permission, YourTurn, true),
+                        (Running, YourTurn, false),
+                        (Permission, YourTurn, false),
+                        (YourTurn, Permission, true),
                         (Permission, Permission, false),
                         (YourTurn, YourTurn, false),
                         (Running, Idle, false),
@@ -145,7 +145,7 @@ mod tests {
             summary("api", Permission).as_deref(),
             Some("api: needs permission")
         );
-        assert_eq!(summary("api", YourTurn).as_deref(), Some("api: your turn"));
+        assert_eq!(summary("api", YourTurn), None);
         assert_eq!(summary("api", Idle), None);
         assert_eq!(
             summary("a\x07pi", Permission).as_deref(),
